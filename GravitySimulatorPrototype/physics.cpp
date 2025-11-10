@@ -15,31 +15,58 @@ public:
 	{
 
 		mag = float(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
-		inclineT = float(jcap / icap);
-		inclineC = float(icap / mag);
+		inclineT = (icap != 0) ? (jcap / icap) : 0;
+		inclineC = (icap != 0) ? (icap / mag) : 0;
 
 	}
 	void getInfo()
 	{
 		LOG(icap<< "\n" << jcap<<"\n" << mag<<"\n" << inclineT<<"\n");
 	}
+	void updateValues()
+	{
+		mag = float(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
+		inclineT = (icap != 0) ? (jcap / icap) : 0;
+		inclineC = (icap != 0) ? (icap / mag) : 0;
+	}
+
+	void operator+=(const vectorP& other)
+	{
+		icap += other.icap;
+		jcap += other.jcap;
+		updateValues();
+	}
+
+	void operator-=(const vectorP& other)
+	{
+		icap -= other.icap;
+		jcap -= other.jcap;
+		updateValues();
+	}
 
 };
 
-vectorP resol(vectorP& one, vectorP& other)
+std::ostream& operator<<(std::ostream& stream, const vectorP& other)
 {
-	 vectorP nuy( one.icap + other.icap, one.jcap + other.jcap);
-	 return nuy;
+	stream << other.icap << "," << other.jcap << "," << other.mag << "," << other.inclineT;
+	return stream;
 }
 
 
 int main()
 {
-	vectorP vector(6, 8);
-	vectorP vector2(-6, -8);
+	using namespace std::literals::chrono_literals;
 
-	vectorP nayi = resol(vector , vector2);
-	nayi.getInfo();
+	static vectorP vector(6, 8);
+	vectorP vector2(4, 5);
+
+	while (vector.mag < 1000)
+	{
+		vector += vector2;
+		LOG(vector);
+		std::this_thread::sleep_for(100ms);
+	}
+	
 
 
 	std::cin.get();
