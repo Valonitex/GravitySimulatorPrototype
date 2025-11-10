@@ -26,10 +26,14 @@ public:
 
 };
 
-vectorP resol(vectorP& one, vectorP& other)
+vectorP resol(std::vector<vectorP> tbs)
 {
-	 vectorP nuy( one.icap + other.icap, one.jcap + other.jcap);
-	 return nuy;
+	extern static vectorP nyu();
+
+	for (int i = 0; i < tbs.size(); i++)
+	{
+		
+	}
 }
 
 
