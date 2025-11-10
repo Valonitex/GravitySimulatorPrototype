@@ -10,6 +10,6 @@
 #include <functional>
 #include <thread>
 #include <chrono>
-
+#include <math.h>
 
 #define LOG(x) std::cout << x << std::endl;
