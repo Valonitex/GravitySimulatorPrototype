@@ -1,10 +1,6 @@
 #include "EndBrace.h"
 
-double dt = 1 / 60;
-
-namespace constants {
-	constexpr double G = 6.67430e-11;
-}
+float dt = 1/60;
 
 class vectorP
 {
@@ -36,18 +32,22 @@ public:
 		inclineC = (icap != 0) ? (icap / mag) : 0;
 	}
 
-	void operator+=(const vectorP& other)
+	vectorP operator+=(const vectorP& other)
 	{
 		icap += other.icap;
 		jcap += other.jcap;
 		updateValues();
+
+		return (*this);
 	}
 
-	void operator-=(const vectorP& other)
+	vectorP operator-=(const vectorP& other)
 	{
 		icap -= other.icap;
 		jcap -= other.jcap;
 		updateValues();
+
+		return (*this);
 	}
 
 
@@ -95,7 +95,7 @@ public:
 	float m_Mass;
 
 public:
-	Body(float m, vectorP pos, vectorP vel, vectorP f)
+	Body(float m, vectorP pos= {0,0}, vectorP vel = {0,0}, vectorP f = {0,0})
 		:m_posVec(pos), m_velVec(vel), m_forVec(f) , m_accVec(0.0f,0.0f)
 	{
 		if (m <= 0)
@@ -105,11 +105,32 @@ public:
 		m_accVec = m_forVec /= m_Mass;
 	}
 
+
 	void Move()
 	{
-		
+		/*vectorP temp(m_accVec *= dt);
+		vectorP temp2(temp *= dt);
+		m_posVec = temp2;*/
+
+		this->m_velVec += (this->m_accVec *= 1/60);
+		this->m_posVec += (this->m_velVec *= 1/60);
+	}
+
+	void GetVal()
+	{
+		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << "---------");
 	}
 };
+
+namespace prereq {
+	constexpr double G = 6.67430e-11;
+
+	float distance(Body a, Body b)
+	{
+		vectorP temp = a.m_posVec -= b.m_posVec;
+		return temp.mag;
+	}
+}
 
 
 int main()
@@ -117,13 +138,18 @@ int main()
 	using namespace std::literals::chrono_literals;
 
 	static vectorP vector(6, 8);
-	vectorP vector2(4, 5);
+	static vectorP vector2(3, 4);
+	static vectorP vector3(20, 20);
 
-	while (vector.mag < 1000)
+	static Body a(10.0f, vector, vector2, vector3);
+
+	while (true)
 	{
-		vector += vector2;
-		LOG(vector);
-		std::this_thread::sleep_for(100ms);
+
+		a.GetVal();
+		a.Move();
+
+		std::this_thread::sleep_for(1s);
 	}
 	
 
