@@ -1,22 +1,22 @@
 #include "EndBrace.h"
 
-float dt = 1/60;
+double dt = (1.0f/720.0f);
 
 class vectorP
 {
 public:
-	float icap;
-	float jcap;
-	float mag;
-	float inclineT;
-	float inclineC;
+	double icap;
+	double jcap;
+	double mag;
+	double inclineT;
+	double inclineC;
 
 public:
-	vectorP(float i , float j)
+	vectorP(double i , double j)
 		:icap(i) , jcap(j)
 	{
 
-		mag = float(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
+		mag = double(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
 		inclineT = (icap != 0) ? (jcap / icap) : 0;
 		inclineC = (icap != 0) ? (icap / mag) : 0;
 
@@ -27,13 +27,15 @@ public:
 	}
 	void updateValues()
 	{
-		mag = float(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
+		mag = double(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
 		inclineT = (icap != 0) ? (jcap / icap) : 0;
 		inclineC = (icap != 0) ? (icap / mag) : 0;
 	}
 
 	vectorP operator+=(const vectorP& other)
 	{
+		//vectorP *temp = new vectorP(icap += other.icap, jcap += other.jcap);
+
 		icap += other.icap;
 		jcap += other.jcap;
 		updateValues();
@@ -51,19 +53,18 @@ public:
 	}
 
 
-	vectorP operator*=(const float t)
+	vectorP operator*( double t)
 	{
-		icap = icap * t;
-		jcap = jcap * t;
-		updateValues();
+		vectorP *temp = new vectorP(icap * t, jcap * t);
+		
 
-		return (*this);
+		return (*temp);
 	}
 
-	vectorP operator/=(const float t)
+	vectorP operator/=( double t)
 	{
-		icap = icap / t;
-		jcap = jcap / t;
+		icap /= t;
+		jcap /= t;
 		updateValues();
 
 		return (*this);
@@ -92,10 +93,10 @@ public:
 	vectorP m_velVec;
 	vectorP m_accVec;
 	vectorP m_forVec;
-	float m_Mass;
+	double m_Mass;
 
 public:
-	Body(float m, vectorP pos= {0,0}, vectorP vel = {0,0}, vectorP f = {0,0})
+	Body(double m, vectorP pos= {0,0}, vectorP vel = {0,0}, vectorP f = {0,0})
 		:m_posVec(pos), m_velVec(vel), m_forVec(f) , m_accVec(0.0f,0.0f)
 	{
 		if (m <= 0)
@@ -111,9 +112,12 @@ public:
 		/*vectorP temp(m_accVec *= dt);
 		vectorP temp2(temp *= dt);
 		m_posVec = temp2;*/
+		vectorP temp(m_accVec * dt);
+		m_velVec += temp;
 
-		this->m_velVec += (this->m_accVec *= 1/60);
-		this->m_posVec += (this->m_velVec *= 1/60);
+		vectorP temp2(m_velVec * dt);
+		m_posVec += temp2;
+
 	}
 
 	void GetVal()
@@ -125,7 +129,7 @@ public:
 namespace prereq {
 	constexpr double G = 6.67430e-11;
 
-	float distance(Body a, Body b)
+	double distance(Body a, Body b)
 	{
 		vectorP temp = a.m_posVec -= b.m_posVec;
 		return temp.mag;
@@ -136,22 +140,63 @@ namespace prereq {
 int main()
 {
 	using namespace std::literals::chrono_literals;
+	using clock = std::chrono::steady_clock;
 
-	static vectorP vector(6, 8);
-	static vectorP vector2(3, 4);
-	static vectorP vector3(20, 20);
+	 vectorP vector(6, 8);
+	 vectorP vector2(3, 4);
+	 vectorP vector3(20, 20);
 
-	static Body a(10.0f, vector, vector2, vector3);
+	 Body a(10.0f, vector, vector2, vector3);
 
-	while (true)
-	{
+	 std::chrono::duration<double> duration(1.0f);
+	 //std::chrono::duration<double> dt_dur(1.0f/60.0f);
 
-		a.GetVal();
-		a.Move();
+	 auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
-		std::this_thread::sleep_for(1s);
-	}
-	
+	 auto start = clock::now();
+	 auto end = start + duration;
+	 auto nextFrame = start;
+
+
+	 while (clock::now() < end)
+	 {
+
+		 auto t0 = clock::now();
+
+		 a.Move();
+
+		// std::this_thread::sleep_for(std::chrono::duration<double>(dt));
+
+		 nextFrame += dt_duration;
+		 std::this_thread::sleep_until(nextFrame);
+
+
+		 auto t1 = clock::now();
+		 auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+		 double dt_ms = dt * 1000.0f;
+		 std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
+	 }
+
+
+
+	 a.GetVal();
+
+	 
+
+
+	/*vectorP temp(vector2 * dt);
+	vector2.getInfo();
+
+	vector3 += temp;
+	vector3.getInfo();
+
+
+	vector2 * dt;
+	vector2.getInfo();
+
+	LOG(vector2 * dt);
+
+	vector2.getInfo();*/
 
 
 	std::cin.get();
