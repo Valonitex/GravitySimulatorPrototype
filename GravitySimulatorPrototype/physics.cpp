@@ -34,7 +34,6 @@ public:
 
 	vectorP operator+=(const vectorP& other)
 	{
-		//vectorP *temp = new vectorP(icap += other.icap, jcap += other.jcap);
 
 		icap += other.icap;
 		jcap += other.jcap;
@@ -109,9 +108,6 @@ public:
 
 	void Move()
 	{
-		/*vectorP temp(m_accVec *= dt);
-		vectorP temp2(temp *= dt);
-		m_posVec = temp2;*/
 		vectorP temp(m_accVec * dt);
 		m_velVec += temp;
 
@@ -149,7 +145,6 @@ int main()
 	 Body a(10.0f, vector, vector2, vector3);
 
 	 std::chrono::duration<double> duration(1.0f);
-	 //std::chrono::duration<double> dt_dur(1.0f/60.0f);
 
 	 auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
