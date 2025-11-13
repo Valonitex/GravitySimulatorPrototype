@@ -161,43 +161,21 @@ int main()
 	 while (clock::now() < end)
 	 {
 
-		 auto t0 = clock::now();
+		 //auto t0 = clock::now();
 
 		 a.Move();
-
-		// std::this_thread::sleep_for(std::chrono::duration<double>(dt));
 
 		 nextFrame += dt_duration;
 		 std::this_thread::sleep_until(nextFrame);
 
 
-		 auto t1 = clock::now();
-		 auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
-		 double dt_ms = dt * 1000.0f;
-		 std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
+		 //auto t1 = clock::now();
+		 //auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+		 //double dt_ms = dt * 1000.0f;
+		 //std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
 	 }
 
-
-
 	 a.GetVal();
-
-	 
-
-
-	/*vectorP temp(vector2 * dt);
-	vector2.getInfo();
-
-	vector3 += temp;
-	vector3.getInfo();
-
-
-	vector2 * dt;
-	vector2.getInfo();
-
-	LOG(vector2 * dt);
-
-	vector2.getInfo();*/
-
 
 	std::cin.get();
 }
