@@ -41,7 +41,7 @@ public:
 		return (*this);
 	}
 
-	vectorP operator-=(const vectorP& other)
+	vectorP operator-=( vectorP& other)
 	{
 		icap -= other.icap;
 		jcap -= other.jcap;
@@ -69,13 +69,13 @@ public:
 		return (*this);
 	}
 
-	vectorP& operator=(const vectorP& other)
+	vectorP& operator||( vectorP& other)
 	{
 		icap = other.icap;
 		jcap = other.jcap;
 		updateValues();
 
-		return *this;
+		return (*this);
 	}
 };
 
@@ -102,7 +102,7 @@ public:
 			throw std::invalid_argument("Mass be positive");
 		m_Mass = m;
 
-		m_accVec = m_forVec /= m_Mass;
+		m_accVec = vectorP(m_forVec /= m_Mass);
 	}
 
 
@@ -112,8 +112,11 @@ public:
 		vectorP temp2(temp *= dt);
 		m_posVec = temp2;*/
 
-		this->m_velVec += (this->m_accVec *= 1/60);
-		this->m_posVec += (this->m_velVec *= 1/60);
+		m_velVec +=  vectorP(m_accVec *= 1/60);
+		LOG(m_velVec <<","<< m_accVec)
+
+		m_posVec +=  vectorP(m_velVec *= 1/60);
+		LOG(m_posVec <<","<< m_velVec)
 	}
 
 	void GetVal()
@@ -137,20 +140,19 @@ int main()
 {
 	using namespace std::literals::chrono_literals;
 
-	static vectorP vector(6, 8);
-	static vectorP vector2(3, 4);
-	static vectorP vector3(20, 20);
+	 vectorP vector(6, 8);
+	 vectorP vector2(3, 4);
+	 vectorP vector3(20, 20);
 
-	static Body a(10.0f, vector, vector2, vector3);
+	 Body a(10.0f, vector, vector2, vector3);
 
-	while (true)
+
+
+	/*for (int i = 0; i < 4; i++)
 	{
-
 		a.GetVal();
 		a.Move();
-
-		std::this_thread::sleep_for(1s);
-	}
+	}*/
 	
 
 
