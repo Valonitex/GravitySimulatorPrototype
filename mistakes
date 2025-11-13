@@ -1,4 +1,0 @@
-never initialize float in this way :- 1/60 ;
-always do it in this form :- 0.1666f ;
-
-always i repeat ALWAYS check if its *= or * 
