@@ -1,6 +1,6 @@
 #include "EndBrace.h"
 
-double dt = (1.0f/720.0f);
+double dt = (1.0f/120.0f);
 
 class vectorP
 {
@@ -51,13 +51,19 @@ public:
 		return (*this);
 	}
 
+	vectorP operator-(const vectorP& other)
+	{
+		return (vectorP(icap - other.icap, jcap - other.jcap));
+	}
 
 	vectorP operator*( double t)
 	{
-		vectorP *temp = new vectorP(icap * t, jcap * t);
-		
+		return (vectorP(icap * t, jcap * t));
+	}
 
-		return (*temp);
+	vectorP operator/(double t)
+	{
+		return (vectorP(icap / t, jcap / t));
 	}
 
 	vectorP operator/=( double t)
@@ -76,6 +82,11 @@ public:
 		updateValues();
 
 		return *this;
+	}
+
+	vectorP negate()
+	{
+		return vectorP(-(icap), -(jcap));
 	}
 };
 
@@ -102,9 +113,14 @@ public:
 			throw std::invalid_argument("Mass be positive");
 		m_Mass = m;
 
-		m_accVec = m_forVec /= m_Mass;
+		m_accVec = m_forVec / m_Mass;
 	}
 
+	void updateVal( vectorP force)
+	{
+		m_forVec = force;
+		m_accVec = force / m_Mass;
+	}
 
 	void Move()
 	{
@@ -118,19 +134,31 @@ public:
 
 	void GetVal()
 	{
-		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << "---------");
+		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec <<"\n"<< "---------");
 	}
+
 };
 
-namespace prereq {
+namespace physics {
 	constexpr double G = 6.67430e-11;
 
-	double distance(Body a, Body b)
+	vectorP displacement(Body a, Body b)
 	{
-		vectorP temp = a.m_posVec -= b.m_posVec;
-		return temp.mag;
+		return (a.m_posVec - b.m_posVec);
+	}
+	void pull(Body& a, Body& b)
+	{
+		vectorP disp = physics::displacement(a, b);
+		vectorP pullvec = (disp / disp.mag) * ((physics::G * a.m_Mass * b.m_Mass) / (disp.mag * disp.mag));
+
+		a.updateVal(pullvec.negate());
+
+		b.updateVal(pullvec);
+
+		//LOG(pullvec);
 	}
 }
+
 
 
 int main()
@@ -142,7 +170,10 @@ int main()
 	 vectorP vector2(3, 4);
 	 vectorP vector3(20, 20);
 
-	 Body a(10.0f, vector, vector2, vector3);
+	 Body a(1000000000000.0f,vector);
+	 Body b(10.0f,vector2);
+
+	 
 
 	 std::chrono::duration<double> duration(1.0f);
 
@@ -156,21 +187,31 @@ int main()
 	 while (clock::now() < end)
 	 {
 
+		 /*a.GetVal();
+		 b.GetVal();*/
+
 		 //auto t0 = clock::now();
-
+		 physics::pull(a, b);
 		 a.Move();
-
+		 b.Move();
+ 
 		 nextFrame += dt_duration;
 		 std::this_thread::sleep_until(nextFrame);
 
 
-		 //auto t1 = clock::now();
-		 //auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
-		 //double dt_ms = dt * 1000.0f;
-		 //std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
-	 }
+		 /*auto t1 = clock::now();
+		 auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+		 double dt_ms = dt * 1000.0f;
+		 std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
+	 } 
+
+	 /*physics::pull(a, b);
+
+	 LOG(b.m_forVec <<"\n"<< b.m_accVec);
+	 LOG(a.m_forVec << "\n" << a.m_accVec);*/
 
 	 a.GetVal();
+	 b.GetVal();
 
 	std::cin.get();
 }
