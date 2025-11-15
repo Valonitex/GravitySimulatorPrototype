@@ -1,6 +1,6 @@
 #include "EndBrace.h"
 
-double dt = (1.0f/120.0f);
+double dt = (1.0f / 120.0f);
 
 class vectorP
 {
@@ -12,8 +12,8 @@ public:
 	double inclineC;
 
 public:
-	vectorP(double i , double j)
-		:icap(i) , jcap(j)
+	vectorP(double i, double j)
+		:icap(i), jcap(j)
 	{
 
 		mag = double(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
@@ -23,7 +23,7 @@ public:
 	}
 	void getInfo()
 	{
-		LOG(icap<< "\n" << jcap<<"\n" << mag<<"\n" << inclineT<<"\n");
+		LOG(icap << "\n" << jcap << "\n" << mag << "\n" << inclineT << "\n");
 	}
 	void updateValues()
 	{
@@ -51,18 +51,12 @@ public:
 		return (*this);
 	}
 
-	vectorP operator+(const vectorP& other)
-	{
-		return (vectorP(icap + other.icap, jcap + other.jcap));
-	}
-
-	
 	vectorP operator-(const vectorP& other)
 	{
 		return (vectorP(icap - other.icap, jcap - other.jcap));
 	}
 
-	vectorP operator*( double t)
+	vectorP operator*(double t)
 	{
 		return (vectorP(icap * t, jcap * t));
 	}
@@ -72,7 +66,7 @@ public:
 		return (vectorP(icap / t, jcap / t));
 	}
 
-	vectorP operator/=( double t)
+	vectorP operator/=(double t)
 	{
 		icap /= t;
 		jcap /= t;
@@ -107,45 +101,40 @@ class Body
 public:
 	vectorP m_posVec;
 	vectorP m_velVec;
-	vectorP m_accVecIn;
-	vectorP m_accVecG;
-	vectorP m_accVec2;
-
+	vectorP m_accVec;
 	vectorP m_forVec;
 	double m_Mass;
-	
+
 public:
-	Body(double m, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP accIn = { 0,0 }, vectorP f = { 0,0 })
-		:m_posVec(pos), m_velVec(vel),  m_accVecIn(accIn) ,m_accVecG(0.0f,0.0f), m_accVec2(0.0f, 0.0f), m_forVec(f)
+	Body(double m, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
+		:m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
 		if (m <= 0)
 			throw std::invalid_argument("Mass be positive");
 		m_Mass = m;
 
-		m_accVecIn += m_forVec / m_Mass;
+		m_accVec = m_forVec / m_Mass;
 	}
 
-	void updateVal( vectorP force)
+	void updateVal(vectorP force)
 	{
 		m_forVec = force;
-		m_accVecG = force / m_Mass;
-		m_accVec2 = m_accVecIn + m_accVecG;
+		m_accVec = force / m_Mass;
 	}
 
-	void Move(Body& other)
+	void Move()
 	{
-		m_posVec += (m_velVec * dt) + (m_accVecIn *dt*dt)/2;
+		vectorP temp(m_accVec * dt);
+		m_velVec += temp;
 
-		physics::pull(*this, other);
+		vectorP temp2(m_velVec * dt);
+		m_posVec += temp2;
 
-		m_velVec += ((m_accVecIn + m_accVec2)/2) * dt;
-
-		m_accVecIn = m_accVec2;
 	}
 
 	void GetVal()
 	{
-		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVecIn << "\n" << m_forVec <<"\n"<< "---------");
+		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec << "\n" << "---------");
 	}
 
 };
@@ -177,55 +166,52 @@ int main()
 	using namespace std::literals::chrono_literals;
 	using clock = std::chrono::steady_clock;
 
-	 vectorP vector(6, 8);
-	 vectorP vector2(3, 4);
-	 vectorP vector4(20, 20);
-	 vectorP nullvec(0.0f, 0.0f);
+	vectorP vector(6, 8);
+	vectorP vector2(3, 4);
+	vectorP vector3(20, 20);
 
-	 Body a(1000000000000.0f,vector);
-	 Body b(10.0f,vector2,nullvec , vector4.negate());
-
-	 
-
-	 std::chrono::duration<double> duration(1.0f);
-
-	 auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
-
-	 auto start = clock::now();
-	 auto end = start + duration;
-	 auto nextFrame = start;
+	Body a(1000000000000.0f, vector);
+	Body b(10.0f, vector2);
 
 
-	 while (clock::now() < end)
-	 {
 
-		 //a.GetVal();
-		 b.GetVal();
+	std::chrono::duration<double> duration(1.0f);
 
-		 //auto t0 = clock::now();
-		 /*physics::pull(a, b);
-		 a.Move();
-		 b.Move();*/
+	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
-		 b.Move(a);
- 
-		 nextFrame += dt_duration;
-		 std::this_thread::sleep_until(nextFrame);
+	auto start = clock::now();
+	auto end = start + duration;
+	auto nextFrame = start;
 
 
-		 /*auto t1 = clock::now();
-		 auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
-		 double dt_ms = dt * 1000.0f;
-		 std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
-	 } 
+	while (clock::now() < end)
+	{
 
-	 /*physics::pull(a, b);
+		/*a.GetVal();
+		b.GetVal();*/
 
-	 LOG(b.m_forVec <<"\n"<< b.m_accVec);
-	 LOG(a.m_forVec << "\n" << a.m_accVec);*/
+		//auto t0 = clock::now();
+		physics::pull(a, b);
+		a.Move();
+		b.Move();
 
-	 //a.GetVal();
-	 b.GetVal();
+		nextFrame += dt_duration;
+		std::this_thread::sleep_until(nextFrame);
+
+
+		/*auto t1 = clock::now();
+		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+		double dt_ms = dt * 1000.0f;
+		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
+	}
+
+	/*physics::pull(a, b);
+
+	LOG(b.m_forVec <<"\n"<< b.m_accVec);
+	LOG(a.m_forVec << "\n" << a.m_accVec);*/
+
+	a.GetVal();
+	b.GetVal();
 
 	std::cin.get();
 }
