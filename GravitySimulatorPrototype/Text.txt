@@ -6,3 +6,5 @@ always do it in this form :- 0.1666f ;
 always i repeat ALWAYS check if its *= or *
 
 ------------------------------------------
+
+no need for normalizing vectors as your slready just adding and subtracting vectors with directions

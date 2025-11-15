@@ -124,11 +124,9 @@ public:
 
 	void Move()
 	{
-		vectorP temp(m_accVec * dt);
-		m_velVec += temp;
+		m_velVec += m_accVec * dt;
 
-		vectorP temp2(m_velVec * dt);
-		m_posVec += temp2;
+		m_posVec += m_velVec * dt;
 
 	}
 
@@ -149,7 +147,9 @@ namespace physics {
 	void pull(Body& a, Body& b)
 	{
 		vectorP disp = physics::displacement(a, b);
-		vectorP pullvec = (disp / disp.mag) * ((physics::G * a.m_Mass * b.m_Mass) / (disp.mag * disp.mag));
+		double epsilon = 1e-2;
+
+		vectorP pullvec = (disp ) * ((physics::G * a.m_Mass * b.m_Mass) / pow(((disp.mag * disp.mag)+ (epsilon*epsilon)),1.5));
 
 		a.updateVal(pullvec.negate());
 
@@ -175,7 +175,7 @@ int main()
 
 
 
-	std::chrono::duration<double> duration(1.0f);
+	std::chrono::duration<double> duration(2.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -187,8 +187,8 @@ int main()
 	while (clock::now() < end)
 	{
 
-		/*a.GetVal();
-		b.GetVal();*/
+		//a.GetVal();
+		b.GetVal();
 
 		//auto t0 = clock::now();
 		physics::pull(a, b);
@@ -210,7 +210,7 @@ int main()
 	LOG(b.m_forVec <<"\n"<< b.m_accVec);
 	LOG(a.m_forVec << "\n" << a.m_accVec);*/
 
-	a.GetVal();
+	//a.GetVal();
 	b.GetVal();
 
 	std::cin.get();
