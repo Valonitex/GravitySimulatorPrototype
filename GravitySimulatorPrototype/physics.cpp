@@ -110,14 +110,13 @@ public:
 	vectorP m_accVecIn;
 	vectorP m_accVecG;
 	vectorP m_accVec2;
-	vectorP m_accVecT;
 
 	vectorP m_forVec;
 	double m_Mass;
 	
 public:
-	Body(double m, vectorP pos= {0,0}, vectorP vel = {0,0}, vectorP f = {0,0})
-		:m_posVec(pos), m_velVec(vel),  m_accVecIn(0.0f,0.0f) ,m_accVecG(0.0f,0.0f), m_accVec2(m_accVecIn), m_forVec(f)
+	Body(double m, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP accIn = { 0,0 }, vectorP f = { 0,0 })
+		:m_posVec(pos), m_velVec(vel),  m_accVecIn(accIn) ,m_accVecG(0.0f,0.0f), m_accVec2(0.0f, 0.0f), m_forVec(f)
 	{
 		if (m <= 0)
 			throw std::invalid_argument("Mass be positive");
@@ -130,20 +129,23 @@ public:
 	{
 		m_forVec = force;
 		m_accVecG = force / m_Mass;
-		m_accVecT = m_accVec2 + m_accVecG;
+		m_accVec2 = m_accVecIn + m_accVecG;
 	}
 
-	void Move()
+	void Move(Body& other)
 	{
-		m_posVec += (m_velVec * dt) + (m_accVec *dt*dt)/2;
-		m_velVec += ((m_accVecIn + m_accVecT)/2) * dt;
+		m_posVec += (m_velVec * dt) + (m_accVecIn *dt*dt)/2;
 
-		
+		physics::pull(*this, other);
+
+		m_velVec += ((m_accVecIn + m_accVec2)/2) * dt;
+
+		m_accVecIn = m_accVec2;
 	}
 
 	void GetVal()
 	{
-		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec <<"\n"<< "---------");
+		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVecIn << "\n" << m_forVec <<"\n"<< "---------");
 	}
 
 };
@@ -177,15 +179,15 @@ int main()
 
 	 vectorP vector(6, 8);
 	 vectorP vector2(3, 4);
-	 vectorP vector3(20, 20);
+	 vectorP vector4(20, 20);
 	 vectorP nullvec(0.0f, 0.0f);
 
 	 Body a(1000000000000.0f,vector);
-	 Body b(10.0f,vector2);
+	 Body b(10.0f,vector2,nullvec , vector4.negate());
 
 	 
 
-	 std::chrono::duration<double> duration(2.0f);
+	 std::chrono::duration<double> duration(1.0f);
 
 	 auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -201,9 +203,11 @@ int main()
 		 b.GetVal();
 
 		 //auto t0 = clock::now();
-		 physics::pull(a, b);
+		 /*physics::pull(a, b);
 		 a.Move();
-		 b.Move();
+		 b.Move();*/
+
+		 b.Move(a);
  
 		 nextFrame += dt_duration;
 		 std::this_thread::sleep_until(nextFrame);
