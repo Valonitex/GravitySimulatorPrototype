@@ -1,35 +1,39 @@
 #include "EndBrace.h"
 
-double dt = (1.0f / 120.0f);
+double dt = (1.0f / 720.0f);
 
 class vectorP
 {
 public:
 	double icap;
 	double jcap;
-	double mag;
-	double inclineT;
-	double inclineC;
+	//double inclineT;
+	//double inclineC;
 
 public:
 	vectorP(double i, double j)
 		:icap(i), jcap(j)
 	{
-
-		mag = double(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
-		inclineT = (icap != 0) ? (jcap / icap) : 0;
-		inclineC = (icap != 0) ? (icap / mag) : 0;
+		//inclineT = (icap != 0) ? (jcap / icap) : 0;
+		//inclineC = (icap != 0) ? (icap / mag) : 0;
 
 	}
 	void getInfo()
 	{
-		LOG(icap << "\n" << jcap << "\n" << mag << "\n" << inclineT << "\n");
+		LOG(icap << "\n" << jcap << "\n");
 	}
 	void updateValues()
 	{
-		mag = double(pow((pow(icap, 2) + pow(jcap, 2)), 0.5));
-		inclineT = (icap != 0) ? (jcap / icap) : 0;
-		inclineC = (icap != 0) ? (icap / mag) : 0;
+		//inclineT = (icap != 0) ? (jcap / icap) : 0;
+		//inclineC = (icap != 0) ? (icap / mag) : 0;
+	}
+	double magSq() const
+	{
+		return icap*icap + jcap*jcap;
+	}
+	double mag() const
+	{
+		return sqrt(magSq());
 	}
 
 	vectorP operator+=(const vectorP& other)
@@ -92,7 +96,7 @@ public:
 
 std::ostream& operator<<(std::ostream& stream, const vectorP& other)
 {
-	stream << other.icap << "," << other.jcap << "," << other.mag << "," << other.inclineT;
+	stream << other.icap << "," << other.jcap ;
 	return stream;
 }
 
@@ -103,15 +107,17 @@ public:
 	vectorP m_velVec;
 	vectorP m_accVec;
 	vectorP m_forVec;
+	double m_radius;
 	double m_Mass;
 
 public:
-	Body(double m, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
+	Body(double m,double r, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
 		:m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
-		if (m <= 0)
-			throw std::invalid_argument("Mass be positive");
+		if (m <= 0 || r<=0)
+			throw std::invalid_argument("Mass/Radius be positive");
 		m_Mass = m;
+		m_radius = r;
 
 		m_accVec = m_forVec / m_Mass;
 	}
@@ -147,15 +153,27 @@ namespace physics {
 	void pull(Body& a, Body& b)
 	{
 		vectorP disp = physics::displacement(a, b);
-		double epsilon = 1e-2;
+		double eps = 1e-2;
 
-		vectorP pullvec = (disp ) * ((physics::G * a.m_Mass * b.m_Mass) / pow(((disp.mag * disp.mag)+ (epsilon*epsilon)),1.5));
+		double distSq = disp.magSq() + eps * eps;
+		double dist = sqrt(distSq);
+		double denom = distSq * dist;
+
+		vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) / denom);
 
 		a.updateVal(pullvec.negate());
 
 		b.updateVal(pullvec);
-
 		//LOG(pullvec);
+	}
+	bool checkCol(const Body& a, const Body& b)
+	{
+		if (displacement(a, b).mag() <= a.m_radius + b.m_radius)
+		{
+			LOG("poof");
+			return false;
+		}
+		return true;
 	}
 }
 
@@ -170,12 +188,12 @@ int main()
 	vectorP vector2(3, 4);
 	vectorP vector3(20, 20);
 
-	Body a(1000000000000.0f, vector);
-	Body b(10.0f, vector2);
+	Body a(1000000000000.0f,0.1f, vector);
+	Body b(10.0f,0.1f, vector2);
 
 
 
-	std::chrono::duration<double> duration(2.0f);
+	std::chrono::duration<double> duration(1.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -186,23 +204,26 @@ int main()
 
 	while (clock::now() < end)
 	{
-
 		//a.GetVal();
-		b.GetVal();
+		//b.GetVal();
 
-		//auto t0 = clock::now();
 		physics::pull(a, b);
+		auto t0 = clock::now();
+
 		a.Move();
 		b.Move();
 
+		if (physics::checkCol(a, b) == false)
+			break;
+
+		auto t1 = clock::now();
+		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+		double dt_ms = dt * 1000000.0f;
+		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
+
+
 		nextFrame += dt_duration;
 		std::this_thread::sleep_until(nextFrame);
-
-
-		/*auto t1 = clock::now();
-		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
-		double dt_ms = dt * 1000.0f;
-		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
 	}
 
 	/*physics::pull(a, b);
