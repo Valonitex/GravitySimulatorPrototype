@@ -1,6 +1,6 @@
 #include "EndBrace.h"
 
-double dt = (1.0f / 720.0f);
+double dt = (1.0f / 360.0f);
 
 class vectorP
 {
@@ -11,7 +11,7 @@ public:
 	//double inclineC;
 
 public:
-	vectorP(double i, double j)
+	vectorP(double i=0, double j=0)
 		:icap(i), jcap(j)
 	{
 		//inclineT = (icap != 0) ? (jcap / icap) : 0;
@@ -107,6 +107,7 @@ public:
 	vectorP m_velVec;
 	vectorP m_accVec;
 	vectorP m_forVec;
+	vectorP m_forRes;
 	double m_radius;
 	double m_Mass;
 
@@ -124,8 +125,14 @@ public:
 
 	void updateVal(vectorP force)
 	{
-		m_forVec = force;
-		m_accVec = force / m_Mass;
+		m_forVec = m_forRes;
+		m_accVec = m_forVec / m_Mass;
+		m_forRes = (0, 0);
+	}
+
+	void forsum(vectorP force)
+	{
+		m_forRes += force;
 	}
 
 	void Move()
@@ -162,7 +169,6 @@ namespace physics {
 		vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) / denom);
 
 		a.updateVal(pullvec.negate());
-
 		b.updateVal(pullvec);
 		//LOG(pullvec);
 	}
@@ -175,6 +181,16 @@ namespace physics {
 		}
 		return true;
 	}
+	void resolve(std::vector<std::reference_wrapper<Body>>& bodies)
+	{
+		for (int i = 0; i < (bodies.size()-1); i++)
+		{
+			for (int j = i + 1; j < bodies.size() ; j++)
+			{
+				physics::pull(bodies[i], bodies[j]);
+			}
+		}
+	}
 }
 
 
@@ -186,12 +202,13 @@ int main()
 
 	vectorP vector(6, 8);
 	vectorP vector2(3, 4);
-	vectorP vector3(20, 20);
+	vectorP vector4(20, 20);
 
 	Body a(1000000000000.0f,0.1f, vector);
 	Body b(10.0f,0.1f, vector2);
+	Body c(100.0f, 0.1f, vector4);
 
-
+	std::vector<std::reference_wrapper<Body>> bodys = { a,b,c };
 
 	std::chrono::duration<double> duration(1.0f);
 
@@ -204,22 +221,26 @@ int main()
 
 	while (clock::now() < end)
 	{
+		//auto t0 = clock::now();
+
 		//a.GetVal();
-		//b.GetVal();
+		b.GetVal();
+		c.GetVal();
 
-		physics::pull(a, b);
-		auto t0 = clock::now();
+		//physics::pull(a, b);
 
+		physics::resolve(bodys);
+		
 		a.Move();
 		b.Move();
 
 		if (physics::checkCol(a, b) == false)
 			break;
 
-		auto t1 = clock::now();
+		/*auto t1 = clock::now();
 		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
 		double dt_ms = dt * 1000000.0f;
-		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
+		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
 
 
 		nextFrame += dt_duration;

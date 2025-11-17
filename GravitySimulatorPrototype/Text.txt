@@ -8,3 +8,7 @@ always i repeat ALWAYS check if its *= or *
 ------------------------------------------
 
 no need for normalizing vectors as your slready just adding and subtracting vectors with directions
+
+dont worry about speed you fast af boi !
+
+vectors always copy
