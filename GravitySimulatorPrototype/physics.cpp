@@ -1,6 +1,6 @@
 #include "EndBrace.h"
 
-double dt = (1.0f / 360.0f);
+double dt = (1.0f / 120.0f);
 
 class vectorP
 {
@@ -123,7 +123,7 @@ public:
 		m_accVec = m_forVec / m_Mass;
 	}
 
-	void updateVal(vectorP force)
+	void updateVal()
 	{
 		m_forVec = m_forRes;
 		m_accVec = m_forVec / m_Mass;
@@ -160,7 +160,7 @@ namespace physics {
 	void pull(Body& a, Body& b)
 	{
 		vectorP disp = physics::displacement(a, b);
-		double eps = 1e-2;
+		double eps = 0.1;
 
 		double distSq = disp.magSq() + eps * eps;
 		double dist = sqrt(distSq);
@@ -168,8 +168,8 @@ namespace physics {
 
 		vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) / denom);
 
-		a.updateVal(pullvec.negate());
-		b.updateVal(pullvec);
+		a.forsum(pullvec.negate());
+		b.forsum(pullvec);
 		//LOG(pullvec);
 	}
 	bool checkCol(const Body& a, const Body& b)
@@ -177,19 +177,23 @@ namespace physics {
 		if (displacement(a, b).mag() <= a.m_radius + b.m_radius)
 		{
 			LOG("poof");
-			return false;
+			return true;
 		}
-		return true;
+		return false;
 	}
 	void resolve(std::vector<std::reference_wrapper<Body>>& bodies)
 	{
-		for (int i = 0; i < (bodies.size()-1); i++)
+		int s = bodies.size();
+		for (int i = 0; i < (s-1); i++)
 		{
 			for (int j = i + 1; j < bodies.size() ; j++)
 			{
 				physics::pull(bodies[i], bodies[j]);
 			}
+			bodies[i].get().updateVal();
 		}
+
+		bodies[s - 1].get().updateVal();
 	}
 }
 
@@ -203,12 +207,16 @@ int main()
 	vectorP vector(6, 8);
 	vectorP vector2(3, 4);
 	vectorP vector4(20, 20);
+	vectorP vectorN(0, 0);
+
 
 	Body a(1000000000000.0f,0.1f, vector);
 	Body b(10.0f,0.1f, vector2);
 	Body c(100.0f, 0.1f, vector4);
 
-	std::vector<std::reference_wrapper<Body>> bodys = { a,b,c };
+	Body d(1.0f, 0.1f, vectorN);
+
+	std::vector<std::reference_wrapper<Body>> bodys = { a, b ,c,d};
 
 	std::chrono::duration<double> duration(1.0f);
 
@@ -221,11 +229,12 @@ int main()
 
 	while (clock::now() < end)
 	{
-		//auto t0 = clock::now();
+		auto t0 = clock::now();
 
 		//a.GetVal();
 		b.GetVal();
 		c.GetVal();
+		d.GetVal();
 
 		//physics::pull(a, b);
 
@@ -233,14 +242,16 @@ int main()
 		
 		a.Move();
 		b.Move();
+		c.Move();
+		d.Move();
 
-		if (physics::checkCol(a, b) == false)
+		if (physics::checkCol(a, b) == true)
 			break;
 
-		/*auto t1 = clock::now();
+		auto t1 = clock::now();
 		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
 		double dt_ms = dt * 1000000.0f;
-		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
+		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
 
 
 		nextFrame += dt_duration;
@@ -252,8 +263,10 @@ int main()
 	LOG(b.m_forVec <<"\n"<< b.m_accVec);
 	LOG(a.m_forVec << "\n" << a.m_accVec);*/
 
-	//a.GetVal();
+	a.GetVal();
 	b.GetVal();
+	c.GetVal();
+	d.GetVal();
 
 	std::cin.get();
 }
