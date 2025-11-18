@@ -123,7 +123,7 @@ public:
 		m_accVec = m_forVec / m_Mass;
 	}
 
-	void updateVal(/*vectorP force*/)
+	void updateVal(vectorP force)
 	{
 		m_forVec = m_forRes;
 		m_accVec = m_forVec / m_Mass;
@@ -168,10 +168,8 @@ namespace physics {
 
 		vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) / denom);
 
-		a.forsum(pullvec.negate());
-		a.updateVal();
-		b.forsum(pullvec);
-		b.updateVal();
+		a.updateVal(pullvec.negate());
+		b.updateVal(pullvec);
 		//LOG(pullvec);
 	}
 	bool checkCol(const Body& a, const Body& b)
