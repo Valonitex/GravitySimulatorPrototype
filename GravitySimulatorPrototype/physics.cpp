@@ -97,6 +97,12 @@ public:
 	{
 		return vectorP(-(icap), -(jcap));
 	}
+
+	void negate_inp()
+	{
+		icap *= -1;
+		jcap *= -1;
+	}
 };
 
 std::ostream& operator<<(std::ostream& stream, const vectorP& other)
@@ -108,6 +114,7 @@ std::ostream& operator<<(std::ostream& stream, const vectorP& other)
 class Body
 {
 public:
+	bool dead;
 	vectorP m_posVec;
 	vectorP m_velVec;
 	vectorP m_accVec;
@@ -119,7 +126,7 @@ public:
 
 public:
 	Body(double m,double r, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
-		:m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
+		:dead(false) ,m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
 		if (m <= 0 || r<=0)
 			throw std::invalid_argument("Mass/Radius be positive");
@@ -169,39 +176,65 @@ namespace physics {
 		double eps = 0.1;
 
 		double distSq = disp.magSq() + eps * eps;
-		double dist = sqrt(distSq);
-		double denom = distSq * dist;
+		double invdist =  1.0/sqrt(distSq);
+		double denom = invdist * invdist * invdist ;
 
-		vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) / denom);
+		vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) * denom);
 
-		a.forsum(pullvec.negate());
 		b.forsum(pullvec);
+		pullvec.negate_inp();
+		a.forsum(pullvec);
+		
 		//LOG(pullvec);
 	}
-	bool checkCol(const Body& a, const Body& b)
+	void checkCol(std::vector<std::unique_ptr<Body>>& bodies)
 	{
-		if (displacement(a, b).mag() <= a.m_radius + b.m_radius)
+		for (int i = 0; i < (bodies.size() - 1); i++)
 		{
-			LOG("poof");
-			return true;
+			Body& boda = *bodies[i];
+			for (int j = i+1; j < bodies.size(); j++)
+			{
+				Body& bodb = *bodies[j];
+				double disp = displacement(boda, bodb).mag();
+				double mindisp = boda.m_radius + bodb.m_radius;
+
+				if (disp < mindisp)
+				{
+					boda.dead = true;
+					LOG(i << j << "gone poof");
+					LOG(boda.m_posVec);
+					LOG(bodb.m_posVec);
+					bodb.dead = true;
+				}
+			}
 		}
-		return false;
+		bodies.erase(
+			std::remove_if(
+				bodies.begin(),
+				bodies.end(),
+				[](const std::unique_ptr<Body>& b) {
+					return b->dead;
+				}
+			),
+			bodies.end()
+		);
 	}
-	void resolve(std::vector<std::reference_wrapper<Body>>& bodies)
+	void resolve(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		int s = bodies.size();
 		for (int i = 0; i < (s-1); i++)
 		{
+			auto& bodya = *bodies[i];
 			for (int j = i + 1; j < bodies.size() ; j++)
 			{
-				physics::pull(bodies[i], bodies[j]);
+				physics::pull( bodya, *(bodies[j]));
 			}
-			bodies[i].get().updateVal();
+			bodies[i]->updateVal();
 		}
 
-		bodies[s - 1].get().updateVal();
+		bodies[s - 1]->updateVal();
 	}
-	void move(std::vector<std::reference_wrapper<Body>>& bodies)
+	void move(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		resolve(bodies);
 		int s = bodies.size();
@@ -210,14 +243,14 @@ namespace physics {
 		double dt2b2 = dt * dtb2;
 		for (int i = 0; i < s; i++)
 		{
-			vectorP temp = bodies[i].get().m_accVec;
-			bodies[i].get().m_posVec += bodies[i].get().m_velVec * dt + (temp * dt2b2);
+			vectorP temp = bodies[i]->m_accVec;
+			bodies[i]->m_posVec += bodies[i]->m_velVec * dt + (temp * dt2b2);
 			oldacc[i]=temp;
 		}
 		resolve(bodies);
 		for (int i = 0; i < s; i++)
 		{
-			bodies[i].get().m_velVec += (oldacc[i] + bodies[i].get().m_accVec) * dtb2;
+			bodies[i]->m_velVec += (oldacc[i] + bodies[i]->m_accVec) * dtb2;
 		}
 		
 	}
@@ -236,13 +269,17 @@ int main()
 	vectorP vectorN(0, 0);
 
 
-	Body a(1000000000000.0f,0.1f, vector);
-	Body b(10.0f,0.1f, vector2);
-	Body c(100.0f, 0.1f, vector4);
+	auto a = std::make_unique<Body>(1000000000000.0f,0.1f, vector);
+	auto b = std::make_unique<Body>(10.0f, 0.1f, vector2);
+	auto c = std::make_unique<Body>(100.0f, 0.1f, vector4);
+	auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
 
-	Body d(1.0f, 0.1f, vectorN);
 
-	std::vector<std::reference_wrapper<Body>> bodys = { a, b,c,d};
+	std::vector<std::unique_ptr<Body>> bodys ;
+	bodys.push_back(std::move(a));
+	bodys.push_back(std::move(b));
+	bodys.push_back(std::move(c));
+	bodys.push_back(std::move(d));
 
 	std::chrono::duration<double> duration(1.0f);
 
@@ -253,28 +290,23 @@ int main()
 	auto nextFrame = start;
 
 
-	while (clock::now() < end)
+	while (clock::now() < end && bodys.size() > 0)
 	{
 		auto t0 = clock::now();
 
-		//a.GetVal();
-		//b.GetVal();
-		//c.GetVal();
-		//d.GetVal();
+		/*bodys[0]->GetVal();
+		bodys[1]->GetVal();
+		bodys[2]->GetVal();
+		bodys[3]->GetVal();*/
 
-		//physics::pull(a, b);
+		/*for (int i = 0; i < bodys.size(); i++)
+		{
+			bodys[i]->GetVal();
+		}*/
 
-		/*physics::resolve(bodys);
-		
-		a.Move();
-		b.Move();
-		c.Move();
-		d.Move();*/
 
 		physics::move(bodys);
-
-		if (physics::checkCol(a, b) == true)
-			break;
+		physics::checkCol(bodys);
 
 		auto t1 = clock::now();
 		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
@@ -286,15 +318,11 @@ int main()
 		std::this_thread::sleep_until(nextFrame);
 	}
 
-	/*physics::pull(a, b);
+	for (int i = 0; i < bodys.size(); i++)
+	{
+		bodys[i]->GetVal();
+	}
 
-	LOG(b.m_forVec <<"\n"<< b.m_accVec);
-	LOG(a.m_forVec << "\n" << a.m_accVec);*/
-
-	a.GetVal();
-	b.GetVal();
-	c.GetVal();
-	d.GetVal();
 
 	std::cin.get();
 }
