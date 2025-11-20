@@ -55,6 +55,11 @@ public:
 		return (*this);
 	}
 
+	vectorP operator+(const vectorP& other)
+	{
+		return (vectorP(icap + other.icap, jcap + other.jcap));
+	}
+
 	vectorP operator-(const vectorP& other)
 	{
 		return (vectorP(icap - other.icap, jcap - other.jcap));
@@ -106,6 +111,7 @@ public:
 	vectorP m_posVec;
 	vectorP m_velVec;
 	vectorP m_accVec;
+	//vectorP m_accVec2;
 	vectorP m_forVec;
 	vectorP m_forRes;
 	double m_radius;
@@ -195,6 +201,26 @@ namespace physics {
 
 		bodies[s - 1].get().updateVal();
 	}
+	void move(std::vector<std::reference_wrapper<Body>>& bodies)
+	{
+		resolve(bodies);
+		int s = bodies.size();
+		std::vector<vectorP> oldacc(s);
+		double dtb2 = dt / 2;
+		double dt2b2 = dt * dtb2;
+		for (int i = 0; i < s; i++)
+		{
+			vectorP temp = bodies[i].get().m_accVec;
+			bodies[i].get().m_posVec += bodies[i].get().m_velVec * dt + (temp * dt2b2);
+			oldacc[i]=temp;
+		}
+		resolve(bodies);
+		for (int i = 0; i < s; i++)
+		{
+			bodies[i].get().m_velVec += (oldacc[i] + bodies[i].get().m_accVec) * dtb2;
+		}
+		
+	}
 }
 
 
@@ -216,7 +242,7 @@ int main()
 
 	Body d(1.0f, 0.1f, vectorN);
 
-	std::vector<std::reference_wrapper<Body>> bodys = { a, b ,c,d};
+	std::vector<std::reference_wrapper<Body>> bodys = { a, b,c,d};
 
 	std::chrono::duration<double> duration(1.0f);
 
@@ -232,18 +258,20 @@ int main()
 		auto t0 = clock::now();
 
 		//a.GetVal();
-		b.GetVal();
-		c.GetVal();
-		d.GetVal();
+		//b.GetVal();
+		//c.GetVal();
+		//d.GetVal();
 
 		//physics::pull(a, b);
 
-		physics::resolve(bodys);
+		/*physics::resolve(bodys);
 		
 		a.Move();
 		b.Move();
 		c.Move();
-		d.Move();
+		d.Move();*/
+
+		physics::move(bodys);
 
 		if (physics::checkCol(a, b) == true)
 			break;
