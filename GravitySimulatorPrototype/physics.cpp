@@ -104,6 +104,20 @@ public:
 
 		return *this;
 	}
+	bool operator!=(const vectorP& other)
+	{
+		if (icap != other.icap || jcap != other.jcap)
+		{
+			return true;
+		}
+	}
+	bool operator==(const vectorP& other)
+	{
+		if (icap == other.icap || jcap == other.jcap)
+		{
+			return true;
+		}
+	}
 
 	vectorP negate()
 	{
@@ -298,9 +312,9 @@ int main()
 	bodys.push_back(std::move(a));
 	bodys.push_back(std::move(b));
 	//bodys.push_back(std::move(c));
-	//bodys.push_back(std::move(d));
+	bodys.push_back(std::move(d));
 
-	std::chrono::duration<double> duration(2.0f);
+	std::chrono::duration<double> duration(5.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -313,6 +327,8 @@ int main()
 	std::vector<char> livyur(21,'.');
 	std::vector<std::vector<char>> livyud(21, livyur);
 
+	std::vector<vectorP> posOs(bodys.size());
+
 
 	while (clock::now() < end && bodys.size() > 0)
 	{
@@ -322,17 +338,21 @@ int main()
 		physics::move(bodys);
 		physics::checkCol(bodys);
 
+
+		
 		for (int i = 0; i < bodys.size(); i++)
 		{
+
 			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
+			posOs[i] = tbpv;
 			vectorP tbpv0 = bodys[i]->m_posVec0.round();
-			int icap = tbpv.icap-1;
-			int jcap = tbpv.jcap-1;
-			int icapo = tbpv0.icap - 1;
-			int jcapo = tbpv0.jcap - 1;
+			int icap = tbpv.icap;
+			int jcap = tbpv.jcap;
+			int icapo = tbpv0.icap ;
+			int jcapo = tbpv0.jcap ;
 			if( icap <= 10 && icap >= -10 && jcap >= -10 && jcap <= 10)
 			{
-				if (jcap != jcapo && icap != icapo)
+				/*if (jcap != jcapo && icap != icapo)
 				{
 					livyud[jcapo][icapo] = '.';
 				}
@@ -343,16 +363,18 @@ int main()
 				else if (icap != icapo && jcap == jcapo)
 				{
 					livyud[jcap][icapo] = '.';
-				}
+				}*/
 
 				
 				//livyud[std::round(tbpv0.jcap)-1][std::round(tbpv0.icap)-1] = '.';
 				livyud[jcap][icap] = 'O';
 			}
 
+
 			
 		}
 
+		
 
 		if (frame % 10 == 0)
 		{
@@ -383,7 +405,23 @@ int main()
 	{
 		bodys[i]->GetVal();
 	}*/
+	for (int i = 0; i < posOs.size(); i++)
+	{
+		vectorP Ovec = posOs[i];
+		bool booly = true;
+		for (int j = 0; j < bodys.size(); j++)
+		{
+			if (Ovec != bodys[j]->m_posVec.round())
+				booly = false;
 
+			if (Ovec != bodys[j]->m_posVec.round())
+				booly = true;
+		}
+		if (booly == false)
+		{
+			livyud[Ovec.jcap][Ovec.icap] = '.';
+		}
+	}
 
 	drawGrid(livyud);
 
