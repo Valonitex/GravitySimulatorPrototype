@@ -2,6 +2,18 @@
 
 double dt = (1.0f / 120.0f);
 
+void drawGrid(const std::vector<std::vector<char>> livyud)
+{
+	for (int i = 0; i < livyud.size(); i++)
+	{
+		for (int j = 0; j < livyud[i].size(); j++)
+		{
+			std::cout << livyud[i][j] << " ";
+		}
+		LOG("");
+	};
+}
+
 class vectorP
 {
 public:
@@ -98,6 +110,11 @@ public:
 		return vectorP(-(icap), -(jcap));
 	}
 
+	vectorP round()
+	{
+		return vectorP(std::round(icap), std::round(jcap));
+	}
+
 	void negate_inp()
 	{
 		icap *= -1;
@@ -116,9 +133,9 @@ class Body
 public:
 	bool dead;
 	vectorP m_posVec;
+	vectorP m_posVec0;
 	vectorP m_velVec;
 	vectorP m_accVec;
-	//vectorP m_accVec2;
 	vectorP m_forVec;
 	vectorP m_forRes;
 	double m_radius;
@@ -126,7 +143,7 @@ public:
 
 public:
 	Body(double m,double r, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
-		:dead(false) ,m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
+		:dead(false) ,m_posVec(pos),m_posVec0(0.0f,0.0f), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
 		if (m <= 0 || r<=0)
 			throw std::invalid_argument("Mass/Radius be positive");
@@ -244,8 +261,10 @@ namespace physics {
 		for (int i = 0; i < s; i++)
 		{
 			vectorP temp = bodies[i]->m_accVec;
-			bodies[i]->m_posVec += bodies[i]->m_velVec * dt + (temp * dt2b2);
+			bodies[i]->m_posVec0 = bodies[i]->m_posVec;
+			bodies[i]->m_posVec += /*bodies[i]->m_posVec*/  bodies[i]->m_velVec * dt + (temp * dt2b2);
 			oldacc[i]=temp;
+
 		}
 		resolve(bodies);
 		for (int i = 0; i < s; i++)
@@ -269,59 +288,106 @@ int main()
 	vectorP vectorN(0, 0);
 
 
-	auto a = std::make_unique<Body>(1000000000000.0f,0.1f, vector);
+	auto a = std::make_unique<Body>(1000000000000.0f, 0.1f, vector);
 	auto b = std::make_unique<Body>(10.0f, 0.1f, vector2);
 	auto c = std::make_unique<Body>(100.0f, 0.1f, vector4);
 	auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
 
 
-	std::vector<std::unique_ptr<Body>> bodys ;
+	std::vector<std::unique_ptr<Body>> bodys;
 	bodys.push_back(std::move(a));
 	bodys.push_back(std::move(b));
-	bodys.push_back(std::move(c));
-	bodys.push_back(std::move(d));
+	//bodys.push_back(std::move(c));
+	//bodys.push_back(std::move(d));
 
-	std::chrono::duration<double> duration(1.0f);
+	std::chrono::duration<double> duration(2.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
 	auto start = clock::now();
 	auto end = start + duration;
 	auto nextFrame = start;
+	int frame = 0;
+
+
+	std::vector<char> livyur(21,'.');
+	std::vector<std::vector<char>> livyud(21, livyur);
 
 
 	while (clock::now() < end && bodys.size() > 0)
 	{
-		auto t0 = clock::now();
-
-		/*bodys[0]->GetVal();
-		bodys[1]->GetVal();
-		bodys[2]->GetVal();
-		bodys[3]->GetVal();*/
-
-		/*for (int i = 0; i < bodys.size(); i++)
-		{
-			bodys[i]->GetVal();
-		}*/
-
+		frame++;
+		//auto t0 = clock::now();
 
 		physics::move(bodys);
 		physics::checkCol(bodys);
 
-		auto t1 = clock::now();
+		for (int i = 0; i < bodys.size(); i++)
+		{
+			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
+			vectorP tbpv0 = bodys[i]->m_posVec0.round();
+			int icap = tbpv.icap-1;
+			int jcap = tbpv.jcap-1;
+			int icapo = tbpv0.icap - 1;
+			int jcapo = tbpv0.jcap - 1;
+			if( icap <= 10 && icap >= -10 && jcap >= -10 && jcap <= 10)
+			{
+				if (jcap != jcapo && icap != icapo)
+				{
+					livyud[jcapo][icapo] = '.';
+				}
+				else if (icap == icapo && jcap != jcapo)
+				{
+					livyud[jcapo][icap] = '.';
+				}
+				else if (icap != icapo && jcap == jcapo)
+				{
+					livyud[jcap][icapo] = '.';
+				}
+
+				
+				//livyud[std::round(tbpv0.jcap)-1][std::round(tbpv0.icap)-1] = '.';
+				livyud[jcap][icap] = 'O';
+			}
+
+			
+		}
+
+
+		if (frame % 10 == 0)
+		{
+			drawGrid(livyud);
+			for (int i = 0; i < bodys.size(); i++)
+			{
+				//bodys[i]->GetVal();
+			}
+			LOG("----------------------------")
+		}
+
+
+		/*auto t1 = clock::now();
 		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
 		double dt_ms = dt * 1000000.0f;
-		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";
-
+		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
 
 		nextFrame += dt_duration;
 		std::this_thread::sleep_until(nextFrame);
+
+		
+
+
+		
 	}
 
-	for (int i = 0; i < bodys.size(); i++)
+	/*for (int i = 0; i < bodys.size(); i++)
 	{
 		bodys[i]->GetVal();
-	}
+	}*/
+
+
+	drawGrid(livyud);
+
+
 
 
 	std::cin.get();

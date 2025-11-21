@@ -16,3 +16,15 @@ vectors always copy
 std::move actually just moves despite what gpt might tell you the og place will just be a nullptr
 use unique_ptr they are goated and more versatile
 u can just -> on a unique_ptr
+
+bodies.erase(
+			std::remove_if(
+				bodies.begin(),
+				bodies.end(),
+				[](const std::unique_ptr<Body>& b) {
+					return b->dead;
+				}
+			),
+			bodies.end()
+		);
+idk tf ts is ;
