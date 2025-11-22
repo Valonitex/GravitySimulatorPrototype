@@ -235,8 +235,8 @@ namespace physics {
 				{
 					boda.dead = true;
 					LOG(i << j << "gone poof");
-					LOG(boda.m_posVec);
-					LOG(bodb.m_posVec);
+					boda.GetVal();
+					bodb.GetVal();
 					bodb.dead = true;
 				}
 			}
@@ -300,13 +300,14 @@ int main()
 
 	vectorP vector(6, 8);
 	vectorP vector2(3, 4);
-	vectorP vector4(20, 20);
+	vectorP vector4(2, -2);
 	vectorP vectorN(0, 0);
 	vectorP poso(9, 9);
 
 
 	auto a = std::make_unique<Body>(1000000000000.0f, 0.1f, vector);
-	auto b = std::make_unique<Body>(10.0f, 0.1f, vector2);
+	auto b = std::make_unique<Body>(10.0f, 0.1f, vector2,vector4);
+	//auto c = std::make_unique<Body>(100.0f, 0.1f, poso);
 	auto c = std::make_unique<Body>(100.0f, 0.1f, vector4);
 	auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
 
@@ -315,9 +316,9 @@ int main()
 	bodys.push_back(std::move(a));
 	bodys.push_back(std::move(b));
 	//bodys.push_back(std::move(c));
-	bodys.push_back(std::move(d));
+	//bodys.push_back(std::move(d));
 
-	std::chrono::duration<double> duration(1000000000000000000.0f);
+	std::chrono::duration<double> duration(1000.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -330,15 +331,32 @@ int main()
 	std::vector<char> livyur(21,'.');
 	std::vector<std::vector<char>> livyud(21, livyur);
 
-	std::vector<vectorP> posOs(bodys.size(),poso);
+	std::vector<vectorP> posOs(bodys.size());
 
 	for (int i = 0; i < bodys.size(); i++)
 	{
 		posOs[i] = bodys[i]->m_posVec;
-	}
+	}  //i dont need this becasue of my poor design choices , at start every posOs = 0 and since
+	// i check every posOs for every body each posOs is valid because its also checked for 0 wait WTFF,nvm
+	// i needed that because what it i dont have a body at 0,0  
+
 
 	while (clock::now() < end && bodys.size() > 0)
 	{
+		for (int i = 0; i < bodys.size(); i++)
+		{
+			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
+
+			if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
+			{
+				//bodys[i]->GetVal();
+				tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
+				//the coords dont match ovec 0,0 will still be "." ahahhaahah
+			}
+			
+			posOs[i] = tbpv;
+		}
+
 		frame++;
 		//auto t0 = clock::now();
 
@@ -351,17 +369,12 @@ int main()
 			bool booly = false;
 			for (int j = 0; j < bodys.size(); j++)
 			{
-				bool boly = Ovec == bodys[j]->m_posVec.round();
-				if (boly == true)
+				bool boly = (Ovec == bodys[j]->m_posVec.round());
+				booly = boly;
+				if (booly == true)
 				{
-					booly = true;
 					break;
 				}
-				else if (boly == false)
-				{
-					booly = false;
-				}
-
 			}
 			if (booly == false)
 			{
@@ -373,59 +386,12 @@ int main()
 			}
 		}
 		
-		for (int i = 0; i < bodys.size(); i++)
-		{
-
-			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
-			posOs[i] = tbpv;
-			/*vectorP tbpv0 = bodys[i]->m_posVec0.round();
-			int icap = tbpv.icap;
-			int jcap = tbpv.jcap;
-			int icapo = tbpv0.icap ;
-			int jcapo = tbpv0.jcap ;
-			if( icap <= 10 && icap >= -10 && jcap >= -10 && jcap <= 10)
-			{
-				if (jcap != jcapo && icap != icapo)
-				{
-					livyud[jcapo][icapo] = '.';
-				}
-				else if (icap == icapo && jcap != jcapo)
-				{
-					livyud[jcapo][icap] = '.';
-				}
-				else if (icap != icapo && jcap == jcapo)
-				{
-					livyud[jcap][icapo] = '.';
-				}
-				livyud[std::round(tbpv0.jcap)-1][std::round(tbpv0.icap)-1] = '.';
-				livyud[jcap][icap] = 'O';
-			}*/
-			
-		}
 		
-
-		
-
 		if (frame % 10 == 0)
 		{
 			drawGrid(livyud);
-			for (int i = 0; i < bodys.size(); i++)
-			{
-				//posOs[i] = poso;
-			}
 			LOG("----------------------------");
-
-			bool booly = (vectorN == vector2);
-			if (booly == false)
-			{
-				LOG("fase");
-			}
-			else if (booly == true)
-			{
-				LOG("truw");
-			}
 		}
-
 
 		/*auto t1 = clock::now();
 		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
@@ -434,13 +400,13 @@ int main()
 
 		nextFrame += dt_duration;
 		std::this_thread::sleep_until(nextFrame);
-
-		
-
-
 		
 	}
 	
 	drawGrid(livyud);
+	for (int i = 0; i < bodys.size(); i++)
+	{
+		bodys[i]->GetVal();
+	}
 	std::cin.get();
 }
