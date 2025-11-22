@@ -106,17 +106,19 @@ public:
 	}
 	bool operator!=(const vectorP& other)
 	{
-		if (icap != other.icap || jcap != other.jcap)
+		if (icap != other.icap && jcap != other.jcap)
 		{
 			return true;
 		}
+		return false;
 	}
 	bool operator==(const vectorP& other)
 	{
-		if (icap == other.icap || jcap == other.jcap)
+		if (icap == other.icap && jcap == other.jcap)
 		{
 			return true;
 		}
+		return false;
 	}
 
 	vectorP negate()
@@ -300,6 +302,7 @@ int main()
 	vectorP vector2(3, 4);
 	vectorP vector4(20, 20);
 	vectorP vectorN(0, 0);
+	vectorP poso(9, 9);
 
 
 	auto a = std::make_unique<Body>(1000000000000.0f, 0.1f, vector);
@@ -314,7 +317,7 @@ int main()
 	//bodys.push_back(std::move(c));
 	bodys.push_back(std::move(d));
 
-	std::chrono::duration<double> duration(5.0f);
+	std::chrono::duration<double> duration(1000000000000000000.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -327,8 +330,12 @@ int main()
 	std::vector<char> livyur(21,'.');
 	std::vector<std::vector<char>> livyud(21, livyur);
 
-	std::vector<vectorP> posOs(bodys.size());
+	std::vector<vectorP> posOs(bodys.size(),poso);
 
+	for (int i = 0; i < bodys.size(); i++)
+	{
+		posOs[i] = bodys[i]->m_posVec;
+	}
 
 	while (clock::now() < end && bodys.size() > 0)
 	{
@@ -338,21 +345,47 @@ int main()
 		physics::move(bodys);
 		physics::checkCol(bodys);
 
+		for (int i = 0; i < posOs.size(); i++)
+		{
+			vectorP Ovec = posOs[i];
+			bool booly = false;
+			for (int j = 0; j < bodys.size(); j++)
+			{
+				bool boly = Ovec == bodys[j]->m_posVec.round();
+				if (boly == true)
+				{
+					booly = true;
+					break;
+				}
+				else if (boly == false)
+				{
+					booly = false;
+				}
 
+			}
+			if (booly == false)
+			{
+				livyud[Ovec.jcap][Ovec.icap] = '.';
+			}
+			else
+			{
+				livyud[Ovec.jcap][Ovec.icap] = 'O';
+			}
+		}
 		
 		for (int i = 0; i < bodys.size(); i++)
 		{
 
 			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
 			posOs[i] = tbpv;
-			vectorP tbpv0 = bodys[i]->m_posVec0.round();
+			/*vectorP tbpv0 = bodys[i]->m_posVec0.round();
 			int icap = tbpv.icap;
 			int jcap = tbpv.jcap;
 			int icapo = tbpv0.icap ;
 			int jcapo = tbpv0.jcap ;
 			if( icap <= 10 && icap >= -10 && jcap >= -10 && jcap <= 10)
 			{
-				/*if (jcap != jcapo && icap != icapo)
+				if (jcap != jcapo && icap != icapo)
 				{
 					livyud[jcapo][icapo] = '.';
 				}
@@ -363,16 +396,13 @@ int main()
 				else if (icap != icapo && jcap == jcapo)
 				{
 					livyud[jcap][icapo] = '.';
-				}*/
-
-				
-				//livyud[std::round(tbpv0.jcap)-1][std::round(tbpv0.icap)-1] = '.';
+				}
+				livyud[std::round(tbpv0.jcap)-1][std::round(tbpv0.icap)-1] = '.';
 				livyud[jcap][icap] = 'O';
-			}
-
-
+			}*/
 			
 		}
+		
 
 		
 
@@ -381,9 +411,19 @@ int main()
 			drawGrid(livyud);
 			for (int i = 0; i < bodys.size(); i++)
 			{
-				//bodys[i]->GetVal();
+				//posOs[i] = poso;
 			}
-			LOG("----------------------------")
+			LOG("----------------------------");
+
+			bool booly = (vectorN == vector2);
+			if (booly == false)
+			{
+				LOG("fase");
+			}
+			else if (booly == true)
+			{
+				LOG("truw");
+			}
 		}
 
 
@@ -400,33 +440,7 @@ int main()
 
 		
 	}
-
-	/*for (int i = 0; i < bodys.size(); i++)
-	{
-		bodys[i]->GetVal();
-	}*/
-	for (int i = 0; i < posOs.size(); i++)
-	{
-		vectorP Ovec = posOs[i];
-		bool booly = true;
-		for (int j = 0; j < bodys.size(); j++)
-		{
-			if (Ovec != bodys[j]->m_posVec.round())
-				booly = false;
-
-			if (Ovec != bodys[j]->m_posVec.round())
-				booly = true;
-		}
-		if (booly == false)
-		{
-			livyud[Ovec.jcap][Ovec.icap] = '.';
-		}
-	}
-
+	
 	drawGrid(livyud);
-
-
-
-
 	std::cin.get();
 }

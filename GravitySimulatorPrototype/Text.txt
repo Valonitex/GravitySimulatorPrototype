@@ -28,3 +28,5 @@ bodies.erase(
 			bodies.end()
 		);
 idk tf ts is ;
+
+AAHAHAHAAHAHAHA always check if its || or &&
