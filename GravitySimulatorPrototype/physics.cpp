@@ -149,7 +149,6 @@ class Body
 public:
 	bool dead;
 	vectorP m_posVec;
-	vectorP m_posVec0;
 	vectorP m_velVec;
 	vectorP m_accVec;
 	vectorP m_forVec;
@@ -159,7 +158,7 @@ public:
 
 public:
 	Body(double m,double r, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
-		:dead(false) ,m_posVec(pos),m_posVec0(0.0f,0.0f), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
+		:dead(false) ,m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
 		if (m <= 0 || r<=0)
 			throw std::invalid_argument("Mass/Radius be positive");
@@ -277,7 +276,6 @@ namespace physics {
 		for (int i = 0; i < s; i++)
 		{
 			vectorP temp = bodies[i]->m_accVec;
-			bodies[i]->m_posVec0 = bodies[i]->m_posVec;
 			bodies[i]->m_posVec += /*bodies[i]->m_posVec*/  bodies[i]->m_velVec * dt + (temp * dt2b2);
 			oldacc[i]=temp;
 
