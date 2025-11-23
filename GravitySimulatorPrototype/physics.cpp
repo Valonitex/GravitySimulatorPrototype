@@ -220,7 +220,7 @@ namespace physics {
 		
 		//LOG(pullvec);
 	}
-	void checkCol(std::vector<std::unique_ptr<Body>>& bodies)
+	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		for (int i = 0; i < (bodies.size() - 1); i++)
 		{
@@ -241,16 +241,24 @@ namespace physics {
 				}
 			}
 		}
-		bodies.erase(
-			std::remove_if(
-				bodies.begin(),
-				bodies.end(),
-				[](const std::unique_ptr<Body>& b) {
-					return b->dead;
-				}
-			),
-			bodies.end()
-		);
+		std::vector<std::unique_ptr<Body>> deadBodies;
+		deadBodies.reserve(bodies.size()); // optional but nice
+
+		auto it = bodies.begin();
+		while (it != bodies.end())
+		{
+			if ((*it)->dead)
+			{
+				// move the unique_ptr into deadBodies
+				deadBodies.push_back(std::move(*it));
+				it = bodies.erase(it);
+			}
+			else {
+				++it;
+			}
+		}
+
+		return deadBodies;
 	}
 	void resolve(std::vector<std::unique_ptr<Body>>& bodies)
 	{
@@ -297,25 +305,37 @@ int main()
 {
 	using namespace std::literals::chrono_literals;
 	using clock = std::chrono::steady_clock;
+	
+	//random bodies and vectors for testing
 
 	vectorP vector(6, 8);
 	vectorP vector2(3, 4);
 	vectorP vector4(2, -2);
+	vectorP vector4c(2, 2);
+	vectorP vectorC(3, 12);
+	vectorP vectorC2(9, 4);
 	vectorP vectorN(0, 0);
-	vectorP poso(9, 9);
+	vectorP poso(9, 12);
+	vectorP anotha1(17, 9);
 
 
 	auto a = std::make_unique<Body>(1000000000000.0f, 0.1f, vector);
 	auto b = std::make_unique<Body>(10.0f, 0.1f, vector2,vector4);
-	//auto c = std::make_unique<Body>(100.0f, 0.1f, poso);
-	auto c = std::make_unique<Body>(100.0f, 0.1f, vector4);
-	auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
+	auto z = std::make_unique<Body>(100.0f, 0.1f, poso,vector4.negate());
+	auto c = std::make_unique<Body>(100.0f, 0.1f, anotha1,vector4.negate()/2);
+	auto g = std::make_unique<Body>(10.0f, 0.1f, vectorC, vector4c.negate());
+	auto h = std::make_unique<Body>(10.0f, 0.1f, vectorC2, vector4c);
+
+	//auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
 
 
 	std::vector<std::unique_ptr<Body>> bodys;
 	bodys.push_back(std::move(a));
 	bodys.push_back(std::move(b));
-	//bodys.push_back(std::move(c));
+	bodys.push_back(std::move(z));
+	bodys.push_back(std::move(c));
+	//bodys.push_back(std::move(g));
+	//bodys.push_back(std::move(h));
 	//bodys.push_back(std::move(d));
 
 	std::chrono::duration<double> duration(1000.0f);
@@ -332,6 +352,8 @@ int main()
 	std::vector<std::vector<char>> livyud(21, livyur);
 
 	std::vector<vectorP> posOs(bodys.size());
+
+	std::vector<std::vector<std::unique_ptr<Body>>> colPairs;
 
 	for (int i = 0; i < bodys.size(); i++)
 	{
@@ -361,7 +383,11 @@ int main()
 		//auto t0 = clock::now();
 
 		physics::move(bodys);
-		physics::checkCol(bodys);
+		auto killed = (physics::checkCol(bodys));
+		if (!killed.empty())
+		{
+			colPairs.push_back(std::move(killed));
+		}
 
 		for (int i = 0; i < posOs.size(); i++)
 		{
@@ -404,9 +430,29 @@ int main()
 	}
 	
 	drawGrid(livyud);
+	LOG("Alive")
 	for (int i = 0; i < bodys.size(); i++)
 	{
 		bodys[i]->GetVal();
 	}
+	LOG("Dead");
+
+	for (auto& pair : colPairs)
+	{
+		int psize = pair.size();
+		if ( psize >= 2)
+		{
+			for(int i = 0 ; i < psize ; i++)
+			{
+				pair[i]->GetVal();
+			}
+		}
+	}
+
+	/*for (int i = 0; i < colPairs.size(); i++)
+	{
+		colPairs[i][0]->GetVal();
+		colPairs[i][1]->GetVal();
+	}*/
 	std::cin.get();
 }
