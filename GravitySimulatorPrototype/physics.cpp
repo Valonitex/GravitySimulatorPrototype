@@ -55,7 +55,7 @@ public:
 
 		icap += other.icap;
 		jcap += other.jcap;
-		updateValues();
+		//updateValues();
 
 		return (*this);
 	}
@@ -64,7 +64,7 @@ public:
 	{
 		icap -= other.icap;
 		jcap -= other.jcap;
-		updateValues();
+		//updateValues();
 
 		return (*this);
 	}
@@ -93,7 +93,7 @@ public:
 	{
 		icap /= t;
 		jcap /= t;
-		updateValues();
+		//updateValues();
 
 		return (*this);
 	}
@@ -102,7 +102,7 @@ public:
 	{
 		icap = other.icap;
 		jcap = other.jcap;
-		updateValues();
+		//updateValues();
 
 		return *this;
 	}
@@ -182,14 +182,6 @@ public:
 		m_forRes += force;
 	}
 
-	void Move()
-	{
-		m_velVec += m_accVec * dt;
-
-		m_posVec += m_velVec * dt;
-
-	}
-
 	void GetVal()
 	{
 		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec << "\n" << "---------");
@@ -235,9 +227,9 @@ namespace physics {
 				if (disp < mindisp)
 				{
 					boda.dead = true;
-					LOG(i << j << "gone poof");
-					boda.GetVal();
-					bodb.GetVal();
+					//LOG(i << j << "gone poof");
+					//boda.GetVal();
+					//bodb.GetVal();
 					bodb.dead = true;
 				}
 			}
@@ -326,7 +318,7 @@ int main()
 	auto g = std::make_unique<Body>(10.0f, 0.1f, vectorC, vector4c.negate());
 	auto h = std::make_unique<Body>(10.0f, 0.1f, vectorC2, vector4c);
 
-	//auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
+	auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
 
 
 	std::vector<std::unique_ptr<Body>> bodys;
@@ -368,10 +360,9 @@ int main()
 		for (int i = 0; i < bodys.size(); i++)
 		{
 			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
-
+			//bodys[i]->GetVal();
 			if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
 			{
-				//bodys[i]->GetVal();
 				tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
 				//the coords dont match ovec 0,0 will still be "." ahahhaahah
 			}
@@ -411,6 +402,11 @@ int main()
 			}
 		}
 		
+
+		/*for (int i = 0; i < bodys.size(); i++)
+		{
+			bodys[i]->GetVal();
+		}*/
 		
 		if (frame % 10 == 0)
 		{
@@ -448,10 +444,5 @@ int main()
 		}
 	}
 
-	/*for (int i = 0; i < colPairs.size(); i++)
-	{
-		colPairs[i][0]->GetVal();
-		colPairs[i][1]->GetVal();
-	}*/
 	std::cin.get();
 }
