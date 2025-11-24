@@ -393,8 +393,7 @@ int main()
 			bool booly = false;
 			for (int j = 0; j < bodys.size(); j++)
 			{
-				bool boly = (Ovec == bodys[j]->m_posVec.round());
-				booly = boly;
+				booly = (Ovec == bodys[j]->m_posVec.round());
 				if (booly == true)
 				{
 					break;
