@@ -150,6 +150,7 @@ class Body
 {
 public:
 	bool dead;
+	bool movability;
 	vectorP m_posVec;
 	vectorP m_velVec;
 	vectorP m_accVec;
@@ -159,8 +160,8 @@ public:
 	double m_Mass;
 
 public:
-	Body(double m,double r, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
-		:dead(false) ,m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
+	Body(double m, double r, bool stat = true, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
+		:dead(false),movability(stat), m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
 		if (m <= 0 || r<=0)
 			throw std::invalid_argument("Mass/Radius be positive");
@@ -277,15 +278,21 @@ namespace physics {
 		double dt2b2 = dt * dtb2;
 		for (int i = 0; i < s; i++)
 		{
-			vectorP temp = bodies[i]->m_accVec;
-			bodies[i]->m_posVec += /*bodies[i]->m_posVec*/  bodies[i]->m_velVec * dt + (temp * dt2b2);
-			oldacc[i]=temp;
+			if(bodies[i]->movability != false)
+			{
+				vectorP temp = bodies[i]->m_accVec;
+				bodies[i]->m_posVec += /*bodies[i]->m_posVec*/  bodies[i]->m_velVec * dt + (temp * dt2b2);
+				oldacc[i] = temp;
+			}
 
 		}
 		resolve(bodies);
 		for (int i = 0; i < s; i++)
 		{
-			bodies[i]->m_velVec += (oldacc[i] + bodies[i]->m_accVec) * dtb2;
+			if (bodies[i]->movability != false)
+			{
+				bodies[i]->m_velVec += (oldacc[i] + bodies[i]->m_accVec) * dtb2;
+			}
 		}
 		
 	}
@@ -307,25 +314,25 @@ int main()
 	vectorP vectorC(3, 12);
 	vectorP vectorC2(9, 4);
 	vectorP vectorN(0, 0);
-	vectorP poso(9, 12);
+	vectorP poso(14, 8);
 	vectorP anotha1(17, 9);
 
 
-	auto a = std::make_unique<Body>(1000000000000.0f, 0.1f, vector);
-	auto b = std::make_unique<Body>(10.0f, 0.1f, vector2,vector4);
-	auto z = std::make_unique<Body>(100.0f, 0.1f, poso,vector4.negate());
-	auto c = std::make_unique<Body>(100.0f, 0.1f, anotha1,vector4.negate()/2);
-	auto g = std::make_unique<Body>(10.0f, 0.1f, vectorC, vector4c.negate());
-	auto h = std::make_unique<Body>(10.0f, 0.1f, vectorC2, vector4c);
+	auto star = std::make_unique<Body>(1000000000000.0f, 0.1f,false, vector);
+	auto perf = std::make_unique<Body>(10.0f, 0.1f,true, vector2,vector4);
+	auto z = std::make_unique<Body>(1000000000000.0f, 0.1f,false, poso );
+	//auto c = std::make_unique<Body>(100.0f, 0.1f,true, anotha1,vector4.negate()/2);
+	//auto g = std::make_unique<Body>(10.0f, 0.1f,true, vectorC, vector4c.negate());
+	//auto h = std::make_unique<Body>(10.0f, 0.1f,true, vectorC2, vector4c);
 
-	auto d = std::make_unique<Body>(1.0f, 0.1f, vectorN);
+	//auto d = std::make_unique<Body>(1.0f, 0.1f,true, vectorN);
 
 
 	std::vector<std::unique_ptr<Body>> bodys;
-	bodys.push_back(std::move(a));
-	bodys.push_back(std::move(b));
+	bodys.push_back(std::move(star));
+	bodys.push_back(std::move(perf));
 	bodys.push_back(std::move(z));
-	bodys.push_back(std::move(c));
+	//bodys.push_back(std::move(c));
 	//bodys.push_back(std::move(g));
 	//bodys.push_back(std::move(h));
 	//bodys.push_back(std::move(d));
