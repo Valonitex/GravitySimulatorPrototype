@@ -298,158 +298,302 @@ namespace physics {
 	}
 }
 
+struct BodyInput
+{
+	double x, y;
+	double xv, yv;
 
+	vectorP pos;
+	vectorP vel;
+
+	double mass, radius;
+	bool movable;
+};
+
+BodyInput getValBod()
+{
+	BodyInput temp;
+
+	int x;
+	std::cout << "Position Coord (X) :";
+	std::cin >> x;
+
+	int y;
+	std::cout << "Position Coord (Y) :";
+	std::cin >> y;
+
+	temp.pos = vectorP(x, y);
+
+	std::cout << "Velocity Vec (X):";
+	std::cin >> x;
+
+	std::cout << "Velocity Vec (Y):";
+	std::cin >> y;
+
+	temp.vel = vectorP(x, y);
+
+	std::cout << "Mass :";
+	std::cin >> temp.mass;
+
+	std::cout << "Radius :";
+	std::cin >> temp.radius;
+
+	std::cout << "Movability (0/1):";
+	std::cin >> temp.movable;
+
+	return temp;
+}
+
+namespace create
+{
+	void bodyAdd(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		BodyInput temp = getValBod();
+
+		auto bod = std::make_unique<Body>(temp.mass, temp.radius, temp.movable, temp.pos, temp.vel);
+		bodies.push_back(std::move(bod));
+	}
+	/*std::unique_ptr<Body> bodyExtract(BodyInput temp)
+	{
+		return(std::make_unique<Body>(temp.mass, temp.radius, temp.movable, vectorP(temp.x, temp.y), vectorP(temp.xv, temp.yv)));
+	}*/
+}
 
 int main()
 {
 	using namespace std::literals::chrono_literals;
 	using clock = std::chrono::steady_clock;
-	
-	//random bodies and vectors for testing
-
-	vectorP vector(6, 8);
-	vectorP vector2(3, 4);
-	vectorP vector4(2, -2);
-	vectorP vector4c(2, 2);
-	vectorP vectorC(3, 12);
-	vectorP vectorC2(9, 4);
-	vectorP vectorN(0, 0);
-	vectorP poso(14, 8);
-	vectorP anotha1(17, 9);
-
-
-	auto star = std::make_unique<Body>(1000000000000.0f, 0.1f,false, vector);
-	auto perf = std::make_unique<Body>(10.0f, 0.1f,true, vector2,vector4);
-	auto z = std::make_unique<Body>(1000000000000.0f, 0.1f,false, poso );
-	auto c = std::make_unique<Body>(100.0f, 0.1f,true, anotha1,vector4.negate()/2);
-	auto g = std::make_unique<Body>(10.0f, 0.1f,true, vectorC, vector4c.negate());
-	auto h = std::make_unique<Body>(10.0f, 0.1f,true, vectorC2, vector4c);
-
-	auto d = std::make_unique<Body>(1.0f, 0.1f,true, vectorN);
-
 
 	std::vector<std::unique_ptr<Body>> bodys;
-	bodys.push_back(std::move(star));
-	bodys.push_back(std::move(perf));
-	bodys.push_back(std::move(z));
-	//bodys.push_back(std::move(c));
-	//bodys.push_back(std::move(g));
-	//bodys.push_back(std::move(h));
-	//bodys.push_back(std::move(d));
-
-	std::chrono::duration<double> duration(5.0f);
-
-	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
-
-	auto start = clock::now();
-	auto end = start + duration;
-	auto nextFrame = start;
-	int frame = 0;
-
-
-	std::vector<char> livyur(21,'.');
-	std::vector<std::vector<char>> livyud(21, livyur);
-
-	std::vector<vectorP> posOs(bodys.size());
-
+	std::vector<std::unique_ptr<Body>> delBods;
 	std::vector<std::vector<std::unique_ptr<Body>>> colPairs;
 
-	for (int i = 0; i < bodys.size(); i++)
+	int operation;
+
+	do
+
 	{
-		posOs[i] = bodys[i]->m_posVec;
-	}  //i dont need this becasue of my poor design choices , at start every posOs = 0 and since
-	// i check every posOs for every body each posOs is valid because its also checked for 0 wait WTFF,nvm
-	// i needed that because what it i dont have a body at 0,0  
+		std::cout << "0:Exit\n1:Add Body\n2:Edit Body\n3:Delete Body\n4:Run\n5:View\n-----------------\n Choose:";
+		std::cin >> operation;
 
 
-	while (clock::now() < end && bodys.size() > 0)
-	{
-		for (int i = 0; i < bodys.size(); i++)
+		if (operation == 1)
 		{
-			vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
-			//bodys[i]->GetVal();
-			if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
+			create::bodyAdd(bodys);
+		}
+
+		if (operation == 2)
+		{
+			int bsize = bodys.size();
+			for (int i = 0; i < bsize; i++)
 			{
-				tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
-				//the coords dont match ovec 0,0 will still be "." ahahhaahah
+				LOG(i);
+				bodys[i]->GetVal();
 			}
-			
-			posOs[i] = tbpv;
-		}
 
-		frame++;
-		//auto t0 = clock::now();
-
-		physics::move(bodys);
-		auto killed = (physics::checkCol(bodys));
-		if (!killed.empty())
-		{
-			colPairs.push_back(std::move(killed));
-		}
-
-		for (int i = 0; i < posOs.size(); i++)
-		{
-			vectorP Ovec = posOs[i];
-			bool booly = false;
-			for (int j = 0; j < bodys.size(); j++)
+			int b;
+			do
 			{
-				booly = (Ovec == bodys[j]->m_posVec.round());
-				if (booly == true)
+				std::cout << "Choose:";
+				std::cin >> b;
+			} while (b>bsize || b<0);
+
+			Body& fn = *bodys[b]; //reference to a body
+			BodyInput temp = getValBod();
+			fn.m_posVec = temp.pos;
+			fn.m_velVec = temp.vel;
+			fn.m_Mass = temp.mass;
+			fn.m_radius = temp.radius;
+			fn.movability = temp.movable; 
+
+		}
+
+		if (operation == 3)
+		{
+			int bsize = bodys.size();
+			for (int i = 0; i < bsize; i++)
+			{
+				LOG(i);
+				bodys[i]->GetVal();
+			}
+
+			int b;
+			do
+			{
+				std::cout << "Choose:";
+				std::cin >> b;
+			} while (b >= bsize || b < 0);
+
+			delBods.push_back(std::move(bodys[b]));
+			bodys.erase(bodys.begin() + b);
+		}
+
+		if (operation == 5)
+		{
+			LOG("Alive\n------------")
+				for (int i = 0; i < bodys.size(); i++)
 				{
-					break;
+					bodys[i]->GetVal();
+				}
+			LOG("Dead\n------------");
+
+			for (auto& pair : colPairs)
+			{
+				int psize = pair.size();
+				if (psize >= 2)
+				{
+					for (int i = 0; i < psize; i++)
+					{
+						pair[i]->GetVal();
+					}
 				}
 			}
-			if (booly == false)
+			LOG("Deleted\n-------------");
+			for (int i = 0; i < delBods.size(); i++)
 			{
-				livyud[Ovec.jcap][Ovec.icap] = '.';
-			}
-			else
-			{
-				livyud[Ovec.jcap][Ovec.icap] = 'O';
+				delBods[i]->GetVal();
 			}
 		}
-		
+		/*vectorP vector(6, 8);
+		vectorP vector2(3, 4);
+		vectorP vector4(2, -2);
+		vectorP vectorN(0, 0);
+		vectorP poso(14, 8);
 
-		/*for (int i = 0; i < bodys.size(); i++)
+
+		auto star = std::make_unique<Body>(1000000000000.0f, 0.1f,false, vector);
+		auto perf = std::make_unique<Body>(10.0f, 0.1f,true, vector2,vector4);
+		auto z = std::make_unique<Body>(1000000000000.0f, 0.1f,false, poso );
+
+		bodys.push_back(std::move(star));
+		bodys.push_back(std::move(perf));
+		bodys.push_back(std::move(z));*/
+
+		if (operation == 4)
 		{
-			bodys[i]->GetVal();
-		}*/
-		
-		if (frame % 15 == 0)
-		{
+			float dur;
+			std::cout << "Runtime:";
+			std::cin >> dur;
+
+			int fps;
+			std::cout << "Per how many frames ? (calculated at 120fps):";
+			std::cin >> fps;
+
+			std::vector<vectorP> posOs(bodys.size());
+
+
+			for (int i = 0; i < bodys.size(); i++)
+			{
+				posOs[i] = bodys[i]->m_posVec;
+			}  //i dont need this becasue of my poor design choices , at start every posOs = 0 and since
+			// i check every posOs for every body each posOs is valid because its also checked for 0 wait WTFF,nvm
+			// i needed that because what it i dont have a body at 0,0  
+
+
+			std::vector<char> livyur(21, '.');
+			std::vector<std::vector<char>> livyud(21, livyur);
+
+			std::chrono::duration<double> duration(dur);
+
+			auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
+
+			auto start = clock::now();
+			auto end = start + duration;
+			auto nextFrame = start;
+			int frame = 0;
+
+			while (clock::now() < end && bodys.size() > 0)
+			{
+				for (int i = 0; i < bodys.size(); i++)
+				{
+					vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
+					//bodys[i]->GetVal();
+					if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
+					{
+						tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
+						//the coords dont match ovec 0,0 will still be "." ahahhaahah
+					}
+
+					posOs[i] = tbpv;
+				}
+
+				frame++;
+				//auto t0 = clock::now();
+
+				physics::move(bodys);
+				auto killed = (physics::checkCol(bodys));
+				if (!killed.empty())
+				{
+					colPairs.push_back(std::move(killed));
+				}
+
+				for (int i = 0; i < posOs.size(); i++)
+				{
+					vectorP Ovec = posOs[i];
+					bool booly = false;
+					for (int j = 0; j < bodys.size(); j++)
+					{
+						booly = (Ovec == bodys[j]->m_posVec.round());
+						if (booly == true)
+						{
+							break;
+						}
+					}
+					if (booly == false)
+					{
+						livyud[Ovec.jcap][Ovec.icap] = '.';
+					}
+					else
+					{
+						livyud[Ovec.jcap][Ovec.icap] = 'O';
+					}
+				}
+
+
+				/*for (int i = 0; i < bodys.size(); i++)
+				{
+					bodys[i]->GetVal();
+				}*/
+
+				if (frame % fps == 0)
+				{
+					drawGrid(livyud);
+					LOG("----------------------------");
+				}
+
+				/*auto t1 = clock::now();
+				auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+				double dt_ms = dt * 1000000.0f;
+				std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
+
+				nextFrame += dt_duration;
+				std::this_thread::sleep_until(nextFrame);
+
+			}
 			drawGrid(livyud);
-			LOG("----------------------------");
-		}
+			LOG("Alive")
+				for (int i = 0; i < bodys.size(); i++)
+				{
+					bodys[i]->GetVal();
+				}
+			LOG("Dead");
 
-		/*auto t1 = clock::now();
-		auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
-		double dt_ms = dt * 1000000.0f;
-		std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
-
-		nextFrame += dt_duration;
-		std::this_thread::sleep_until(nextFrame);
-		
-	}
-	
-	drawGrid(livyud);
-	LOG("Alive")
-	for (int i = 0; i < bodys.size(); i++)
-	{
-		bodys[i]->GetVal();
-	}
-	LOG("Dead");
-
-	for (auto& pair : colPairs)
-	{
-		int psize = pair.size();
-		if ( psize >= 2)
-		{
-			for(int i = 0 ; i < psize ; i++)
+			for (auto& pair : colPairs)
 			{
-				pair[i]->GetVal();
+				int psize = pair.size();
+				if (psize >= 2)
+				{
+					for (int i = 0; i < psize; i++)
+					{
+						pair[i]->GetVal();
+					}
+				}
 			}
+
 		}
-	}
+
+
+	} while (operation != 0);
 
 	std::cin.get();
 }
