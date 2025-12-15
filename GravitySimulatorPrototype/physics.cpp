@@ -321,11 +321,11 @@ int main()
 	auto star = std::make_unique<Body>(1000000000000.0f, 0.1f,false, vector);
 	auto perf = std::make_unique<Body>(10.0f, 0.1f,true, vector2,vector4);
 	auto z = std::make_unique<Body>(1000000000000.0f, 0.1f,false, poso );
-	//auto c = std::make_unique<Body>(100.0f, 0.1f,true, anotha1,vector4.negate()/2);
-	//auto g = std::make_unique<Body>(10.0f, 0.1f,true, vectorC, vector4c.negate());
-	//auto h = std::make_unique<Body>(10.0f, 0.1f,true, vectorC2, vector4c);
+	auto c = std::make_unique<Body>(100.0f, 0.1f,true, anotha1,vector4.negate()/2);
+	auto g = std::make_unique<Body>(10.0f, 0.1f,true, vectorC, vector4c.negate());
+	auto h = std::make_unique<Body>(10.0f, 0.1f,true, vectorC2, vector4c);
 
-	//auto d = std::make_unique<Body>(1.0f, 0.1f,true, vectorN);
+	auto d = std::make_unique<Body>(1.0f, 0.1f,true, vectorN);
 
 
 	std::vector<std::unique_ptr<Body>> bodys;
@@ -337,7 +337,7 @@ int main()
 	//bodys.push_back(std::move(h));
 	//bodys.push_back(std::move(d));
 
-	std::chrono::duration<double> duration(1000.0f);
+	std::chrono::duration<double> duration(5.0f);
 
 	auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
 
@@ -415,7 +415,7 @@ int main()
 			bodys[i]->GetVal();
 		}*/
 		
-		if (frame % 10 == 0)
+		if (frame % 15 == 0)
 		{
 			drawGrid(livyud);
 			LOG("----------------------------");
