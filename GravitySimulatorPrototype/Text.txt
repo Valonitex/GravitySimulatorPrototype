@@ -33,3 +33,11 @@ bodies.erase(
 idk tf ts is ;
 
 AAHAHAHAAHAHAHA always check if its || or &&
+
+g++ *.cpp -o sim
+./sim
+
+to compile and run
+
+*.cpp for all files ending in cpp
+sim is the name of the executable 
