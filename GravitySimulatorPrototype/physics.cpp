@@ -307,7 +307,7 @@ struct BodyInput
 	vectorP vel;
 
 	double mass, radius;
-	bool movable;
+	int movable; //if its kept bool and a value other than 0 ir 1 is given it goes haywire , atleast for my poor code
 };
 
 BodyInput getValBod()
@@ -332,16 +332,35 @@ BodyInput getValBod()
 
 	temp.vel = vectorP(x, y);
 
-	std::cout << "Mass :";
-	std::cin >> temp.mass;
+	do
+	{
+		std::cout << "Mass :";
+		std::cin >> temp.mass;
+	} while (temp.mass <= 0);
 
-	std::cout << "Radius :";
-	std::cin >> temp.radius;
+	do
+	{
+		std::cout << "Radius :";
+		std::cin >> temp.radius;
+	} while (temp.radius <= 0); 
 
-	std::cout << "Movability (0/1):";
-	std::cin >> temp.movable;
+	do
+	{
+		std::cout << "Movability (0/1):";
+		std::cin >> temp.movable;
+	} while (temp.movable < 0 || temp.movable > 1); //!= doesnt work because then both need to be satisfied which can nevver happen
 
 	return temp;
+}
+
+void getValArr(std::vector<std::unique_ptr<Body>>& bodies)
+{
+	int bsize = bodies.size();
+	for (int i = 0; i < bsize; i++)
+	{
+		LOG("["<<i<<"]");
+		bodies[i]->GetVal();
+	}
 }
 
 namespace create
@@ -379,17 +398,16 @@ int main()
 
 		if (operation == 1)
 		{
+
+			LOG("-----")
 			create::bodyAdd(bodys);
 		}
 
 		if (operation == 2)
 		{
+			LOG("-----")
+			getValArr(bodys);
 			int bsize = bodys.size();
-			for (int i = 0; i < bsize; i++)
-			{
-				LOG(i);
-				bodys[i]->GetVal();
-			}
 
 			int b;
 			do
@@ -410,12 +428,9 @@ int main()
 
 		if (operation == 3)
 		{
+			LOG("-----")
+			getValArr(bodys);
 			int bsize = bodys.size();
-			for (int i = 0; i < bsize; i++)
-			{
-				LOG(i);
-				bodys[i]->GetVal();
-			}
 
 			int b;
 			do
@@ -430,6 +445,7 @@ int main()
 
 		if (operation == 5)
 		{
+			LOG("-----")
 			LOG("Alive\n------------")
 				for (int i = 0; i < bodys.size(); i++)
 				{
@@ -471,6 +487,7 @@ int main()
 
 		if (operation == 4)
 		{
+			LOG("-----")
 			float dur;
 			std::cout << "Runtime:";
 			std::cin >> dur;
@@ -478,6 +495,13 @@ int main()
 			int fps;
 			std::cout << "Per how many frames ? (calculated at 120fps):";
 			std::cin >> fps;
+
+			int stat;
+			do
+			{
+				std::cout << "Raw Data ? (0/1) :";
+				std::cin >> stat;
+			} while (stat < 0 || stat > 1);
 
 			std::vector<vectorP> posOs(bodys.size());
 
@@ -507,7 +531,12 @@ int main()
 				for (int i = 0; i < bodys.size(); i++)
 				{
 					vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
-					//bodys[i]->GetVal();
+					
+					if(stat==1)
+					{
+						bodys[i]->GetVal();
+					}
+
 					if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
 					{
 						tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
@@ -555,7 +584,7 @@ int main()
 					bodys[i]->GetVal();
 				}*/
 
-				if (frame % fps == 0)
+				if (frame % fps == 0 && stat == 0)
 				{
 					drawGrid(livyud);
 					LOG("----------------------------");
@@ -571,12 +600,12 @@ int main()
 
 			}
 			drawGrid(livyud);
-			LOG("Alive")
+			LOG("Alive\n--------------")
 				for (int i = 0; i < bodys.size(); i++)
 				{
 					bodys[i]->GetVal();
 				}
-			LOG("Dead");
+			LOG("Dead\n------------");
 
 			for (auto& pair : colPairs)
 			{
@@ -589,10 +618,15 @@ int main()
 					}
 				}
 			}
+			LOG("Deleted\n-------------");
+			for (int i = 0; i < delBods.size(); i++)
+			{
+				delBods[i]->GetVal();
+			}
 
 		}
 
-
+		LOG("---------------")
 	} while (operation != 0);
 
 	std::cin.get();
