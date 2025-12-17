@@ -188,6 +188,11 @@ public:
 		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec << "\n" << "---------");
 	}
 
+	std::unique_ptr<Body> clone() const
+	{
+		return std::make_unique<Body>(m_Mass, m_radius, movability, m_posVec, m_velVec, m_forVec);
+	}
+
 };
 
 namespace physics {
@@ -492,17 +497,26 @@ int main()
 			std::cout << "Runtime:";
 			std::cin >> dur;
 
-			int fps;
-			std::cout << "Per how many frames ? (calculated at 120fps):";
-			std::cin >> fps;
-
 			int stat;
 			do
 			{
-				std::cout << "Raw Data ? (0/1) :";
+				std::cout << "Grid / Raw Data / No data ? (0/1/2) :";
 				std::cin >> stat;
-			} while (stat < 0 || stat > 1);
+			} while (stat < 0 || stat > 2);
 
+
+			int fps;
+			if(stat==0)
+			{
+				std::cout << "Per how many frames ? (calculated at 120fps):";
+				std::cin >> fps;
+			}
+
+			std::vector<std::unique_ptr<Body>> bodOs;
+			bodOs.reserve(bodys.size());
+			for (const auto& b : bodys) // reference is important as otherwise itll try to copy a unique_ptr into b
+				bodOs.push_back(b ? b->clone() : nullptr);
+			
 			std::vector<vectorP> posOs(bodys.size());
 
 
@@ -517,88 +531,119 @@ int main()
 			std::vector<char> livyur(21, '.');
 			std::vector<std::vector<char>> livyud(21, livyur);
 
-			std::chrono::duration<double> duration(dur);
+			//std::vector<char> livyurc(21, '.'); 
+			//std::vector<std::vector<char>> livyudc(21, livyurc);
 
-			auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
+			int rerun = 1;
 
-			auto start = clock::now();
-			auto end = start + duration;
-			auto nextFrame = start;
-			int frame = 0;
-
-			while (clock::now() < end && bodys.size() > 0)
+			do 
 			{
-				for (int i = 0; i < bodys.size(); i++)
+				bodys.clear();
+				bodys.reserve(bodOs.size());
+				for (const auto& b : bodOs)
+					bodys.push_back(b ? b->clone() : nullptr);
+
+				std::chrono::duration<double> duration(dur);
+
+				auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
+
+				auto start = clock::now();
+				auto end = start + duration;
+				auto nextFrame = start;
+				int frame = 0;
+
+				while (clock::now() < end && bodys.size() > 0)
 				{
-					vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
 					
-					if(stat==1)
+					if (stat == 0)
 					{
-						bodys[i]->GetVal();
-					}
-
-					if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
-					{
-						tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
-						//the coords dont match ovec 0,0 will still be "." ahahhaahah
-					}
-
-					posOs[i] = tbpv;
-				}
-
-				frame++;
-				//auto t0 = clock::now();
-
-				physics::move(bodys);
-				auto killed = (physics::checkCol(bodys));
-				if (!killed.empty())
-				{
-					colPairs.push_back(std::move(killed));
-				}
-
-				for (int i = 0; i < posOs.size(); i++)
-				{
-					vectorP Ovec = posOs[i];
-					bool booly = false;
-					for (int j = 0; j < bodys.size(); j++)
-					{
-						booly = (Ovec == bodys[j]->m_posVec.round());
-						if (booly == true)
+						for (int i = 0; i < bodys.size(); i++)
 						{
-							break;
+							vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
+
+							if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
+							{
+								tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
+								//the coords dont match ovec 0,0 will still be "." ahahhaahah
+							}
+
+							posOs[i] = tbpv;
 						}
 					}
-					if (booly == false)
+
+					frame++;
+					//auto t0 = clock::now();
+
+					physics::move(bodys);
+					auto killed = (physics::checkCol(bodys));
+					if (!killed.empty())
 					{
-						livyud[Ovec.jcap][Ovec.icap] = '.';
+						colPairs.push_back(std::move(killed));
 					}
-					else
+					if (stat == 0)
 					{
-						livyud[Ovec.jcap][Ovec.icap] = 'O';
+						for (int i = 0; i < posOs.size(); i++)
+						{
+							vectorP Ovec = posOs[i];
+							bool booly = false;
+							for (int j = 0; j < bodys.size(); j++)
+							{
+								booly = (Ovec == bodys[j]->m_posVec.round());
+								if (booly == true)
+								{
+									break;
+								}
+							}
+							if (booly == false)
+							{
+								livyud[Ovec.jcap][Ovec.icap] = '.';
+							}
+							else
+							{
+								livyud[Ovec.jcap][Ovec.icap] = 'O';
+							}
+						}
+					}
+
+					if (stat == 1)
+					{
+						for (int i = 0; i < bodys.size(); i++)
+						{
+							bodys[i]->GetVal();
+						}
+					}
+
+					if (stat == 0 && frame % fps == 0)
+					{
+						drawGrid(livyud);
+						LOG("----------------------------");
+					}
+
+
+					/*auto t1 = clock::now();
+					auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+					double dt_ms = dt * 1000000.0f;
+					std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
+
+					nextFrame += dt_duration;
+					std::this_thread::sleep_until(nextFrame);
+
+				}
+
+				std::cout << "Rerun ? (0/1)";
+				std::cin >> rerun;
+
+				if (rerun == 1)
+				{
+					std::vector<char> dots(21, '.');
+					for (int i = 0; i < 21; i++)
+					{
+						livyud[i] = dots;
 					}
 				}
 
+			} while (rerun == 1);
 
-				/*for (int i = 0; i < bodys.size(); i++)
-				{
-					bodys[i]->GetVal();
-				}*/
-
-				if (frame % fps == 0 && stat == 0)
-				{
-					drawGrid(livyud);
-					LOG("----------------------------");
-				}
-
-				/*auto t1 = clock::now();
-				auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
-				double dt_ms = dt * 1000000.0f;
-				std::cout << "work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n";*/
-
-				nextFrame += dt_duration;
-				std::this_thread::sleep_until(nextFrame);
-
-			}
 			drawGrid(livyud);
 			LOG("Alive\n--------------")
 				for (int i = 0; i < bodys.size(); i++)
