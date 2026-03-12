@@ -74,7 +74,7 @@ public:
 		return (vectorP(icap + other.icap, jcap + other.jcap));
 	}
 
-	vectorP operator-(const vectorP& other)
+	vectorP operator-(const vectorP& other) const //const coz matrix mul told me 
 	{
 		return (vectorP(icap - other.icap, jcap - other.jcap));
 	}
@@ -108,7 +108,7 @@ public:
 	}
 	bool operator!=(const vectorP& other)
 	{
-		if (icap != other.icap && jcap != other.jcap)
+		if (icap != other.icap || jcap != other.jcap)
 		{
 			return true;
 		}
@@ -160,7 +160,7 @@ public:
 	double m_Mass;
 
 public:
-	Body(double m, double r, bool stat = true, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 })
+	Body(double m, double r, bool stat = true, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 }) //stat = static
 		:dead(false),movability(stat), m_posVec(pos), m_velVec(vel), m_forVec(f), m_accVec(0.0f, 0.0f)
 	{
 		if (m <= 0 || r<=0)
@@ -198,10 +198,11 @@ public:
 namespace physics {
 	constexpr double G = 6.67430e-11;
 
-	vectorP displacement(Body a, Body b)
+	vectorP displacement(const Body& a,const Body& b)
 	{
 		return (a.m_posVec - b.m_posVec);
 	}
+
 	void pull(Body& a, Body& b)
 	{
 		vectorP disp = physics::displacement(a, b);
@@ -219,8 +220,11 @@ namespace physics {
 		
 		//LOG(pullvec);
 	}
+
 	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies)
 	{
+		std::vector<std::unique_ptr<Body>> addtobodies;
+
 		for (int i = 0; i < (bodies.size() - 1); i++)
 		{
 			Body& boda = *bodies[i];
@@ -232,11 +236,19 @@ namespace physics {
 
 				if (disp < mindisp)
 				{
+					float newMass = boda.m_Mass + bodb.m_Mass;
+					vectorP newPos = (boda.m_posVec + bodb.m_posVec) / 2;
+					vectorP newVec = ((boda.m_velVec * boda.m_Mass ) + (bodb.m_velVec * bodb.m_Mass)) / newMass;
+					vectorP newFor = (boda.m_forVec + bodb.m_forVec) / 2; 
+					double newRadius = pow(boda.m_radius * boda.m_radius * boda.m_radius + bodb.m_radius * bodb.m_radius * bodb.m_radius, 1.0f / 3.0f);
+					auto newBody = std::make_unique<Body>(newMass, newRadius, true,newPos, newVec, newFor);
+					
 					boda.dead = true;
 					//LOG(i << j << "gone poof");
 					//boda.GetVal();
 					//bodb.GetVal();
 					bodb.dead = true;
+					bodies.push_back(std::move(newBody));
 				}
 			}
 		}
@@ -259,6 +271,7 @@ namespace physics {
 
 		return deadBodies;
 	}
+
 	void resolve(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		int s = bodies.size();
@@ -274,6 +287,7 @@ namespace physics {
 
 		bodies[s - 1]->updateVal();
 	}
+
 	void move(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		resolve(bodies);
@@ -421,7 +435,7 @@ int main()
 				std::cin >> b;
 			} while (b>bsize || b<0);
 
-			Body& fn = *bodys[b]; //reference to a body
+			Body& fn = *bodys[b]; //reference to a body fn = fornow??? i guess
 			BodyInput temp = getValBod();
 			fn.m_posVec = temp.pos;
 			fn.m_velVec = temp.vel;
@@ -450,6 +464,16 @@ int main()
 
 		if (operation == 5)
 		{
+			vectorP vector(6, 8);
+			vectorP vector2(3, 4);
+			vectorP vector4(2, -2);
+
+			auto star = std::make_unique<Body>(1000000000000.0f, 0.1f, false, vector);
+			auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector2, vector4);
+
+			bodys.push_back(std::move(star));
+			bodys.push_back(std::move(perf));
+
 			LOG("-----")
 			LOG("Alive\n------------")
 				for (int i = 0; i < bodys.size(); i++)
@@ -475,19 +499,15 @@ int main()
 				delBods[i]->GetVal();
 			}
 		}
-		/*vectorP vector(6, 8);
-		vectorP vector2(3, 4);
-		vectorP vector4(2, -2);
-		vectorP vectorN(0, 0);
-		vectorP poso(14, 8);
+		
+		/*vectorP vectorN(0, 0);
+		vectorP poso(14, 8);*/
 
 
-		auto star = std::make_unique<Body>(1000000000000.0f, 0.1f,false, vector);
-		auto perf = std::make_unique<Body>(10.0f, 0.1f,true, vector2,vector4);
-		auto z = std::make_unique<Body>(1000000000000.0f, 0.1f,false, poso );
+		
+		/*auto z = std::make_unique<Body>(1000000000000.0f, 0.1f, false, poso);
 
-		bodys.push_back(std::move(star));
-		bodys.push_back(std::move(perf));
+		
 		bodys.push_back(std::move(z));*/
 
 		if (operation == 4)
