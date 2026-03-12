@@ -1,6 +1,7 @@
-//hi
+﻿//hi
 
 #include "EndBrace.h"
+
 
 double dt = (1.0f / 120.0f);
 
@@ -69,7 +70,7 @@ public:
 		return (*this);
 	}
 
-	vectorP operator+(const vectorP& other)
+	vectorP operator+(const vectorP& other) const 
 	{
 		return (vectorP(icap + other.icap, jcap + other.jcap));
 	}
@@ -79,12 +80,12 @@ public:
 		return (vectorP(icap - other.icap, jcap - other.jcap));
 	}
 
-	vectorP operator*(double t)
+	vectorP operator*(double t) const 
 	{
 		return (vectorP(icap * t, jcap * t));
 	}
-
-	vectorP operator/(double t)
+	 
+	vectorP operator/(double t) const
 	{
 		return (vectorP(icap / t, jcap / t));
 	}
@@ -106,7 +107,7 @@ public:
 
 		return *this;
 	}
-	bool operator!=(const vectorP& other)
+	bool operator!=(const vectorP& other) const
 	{
 		if (icap != other.icap || jcap != other.jcap)
 		{
@@ -114,7 +115,7 @@ public:
 		}
 		return false;
 	}
-	bool operator==(const vectorP& other)
+	bool operator==(const vectorP& other) const
 	{
 		if (icap == other.icap && jcap == other.jcap)
 		{
@@ -223,50 +224,93 @@ namespace physics {
 
 	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies)
 	{
-		std::vector<std::unique_ptr<Body>> addtobodies;
+		int n = bodies.size();
 
-		for (int i = 0; i < (bodies.size() - 1); i++)
+		// Build collision graph using Union-Find
+		std::vector<int> parent(n);
+		for (int i = 0; i < n; i++) parent[i] = i;
+
+		std::function<int(int)> find = [&](int x) {
+			return parent[x] == x ? x : parent[x] = find(parent[x]);
+			};
+
+		auto unite = [&](int x, int y) {
+			parent[find(x)] = find(y);
+			};
+
+		// Detect all collisions and union them
+		for (int i = 0; i < n - 1; i++)
 		{
+			if (!bodies[i]) continue;  // ✓ Skip if already moved
+
 			Body& boda = *bodies[i];
-			for (int j = i+1; j < bodies.size(); j++)
+			for (int j = i + 1; j < n; j++)
 			{
+				if (!bodies[j]) continue;  // ✓ Skip if already moved
+
 				Body& bodb = *bodies[j];
 				double disp = displacement(boda, bodb).mag();
 				double mindisp = boda.m_radius + bodb.m_radius;
 
 				if (disp < mindisp)
 				{
-					float newMass = boda.m_Mass + bodb.m_Mass;
-					vectorP newPos = (boda.m_posVec + bodb.m_posVec) / 2;
-					vectorP newVec = ((boda.m_velVec * boda.m_Mass ) + (bodb.m_velVec * bodb.m_Mass)) / newMass;
-					vectorP newFor = (boda.m_forVec + bodb.m_forVec) / 2; 
-					double newRadius = pow(boda.m_radius * boda.m_radius * boda.m_radius + bodb.m_radius * bodb.m_radius * bodb.m_radius, 1.0f / 3.0f);
-					auto newBody = std::make_unique<Body>(newMass, newRadius, true,newPos, newVec, newFor);
-					
-					boda.dead = true;
-					//LOG(i << j << "gone poof");
-					//boda.GetVal();
-					//bodb.GetVal();
-					bodb.dead = true;
-					bodies.push_back(std::move(newBody));
+					unite(i, j);
 				}
 			}
 		}
-		std::vector<std::unique_ptr<Body>> deadBodies;
-		deadBodies.reserve(bodies.size()); // optional but nice
 
+		// Group bodies by collision cluster
+		std::map<int, std::vector<int>> clusters;
+		for (int i = 0; i < n; i++)
+		{
+			int root = find(i);
+			clusters[root].push_back(i);
+		}
+
+		// Merge each cluster with 2+ bodies
+		std::vector<std::unique_ptr<Body>> deadBodies;
+		for (auto& [root, indices] : clusters)
+		{
+			if (indices.size() >= 2)
+			{
+				// Calculate merged properties
+				double totalMass = 0;
+				vectorP weightedPos(0, 0);
+				vectorP weightedVel(0, 0);
+				vectorP totalForce(0, 0);
+				double volumeSum = 0;
+
+				for (int idx : indices)
+				{
+					Body& b = *bodies[idx];
+					totalMass += b.m_Mass;
+					weightedPos += b.m_posVec * b.m_Mass;
+					weightedVel += b.m_velVec * b.m_Mass;
+					totalForce += b.m_forVec;
+					volumeSum += b.m_radius * b.m_radius * b.m_radius;
+
+					b.dead = true;
+					deadBodies.push_back(std::move(bodies[idx]));
+				}
+
+				vectorP newPos = weightedPos / totalMass;
+				vectorP newVel = weightedVel / totalMass;
+				vectorP newFor = totalForce / indices.size();
+				double newRadius = pow(volumeSum, 1.0 / 3.0);
+
+				auto newBody = std::make_unique<Body>(totalMass, newRadius, true, newPos, newVel, newFor);
+				bodies.push_back(std::move(newBody));
+			}
+		}
+
+		// Remove dead bodies
 		auto it = bodies.begin();
 		while (it != bodies.end())
 		{
 			if ((*it)->dead)
-			{
-				// move the unique_ptr into deadBodies
-				deadBodies.push_back(std::move(*it));
 				it = bodies.erase(it);
-			}
-			else {
+			else
 				++it;
-			}
 		}
 
 		return deadBodies;
@@ -466,9 +510,9 @@ int main()
 		{
 			vectorP vector(6, 8);
 			vectorP vector2(3, 4);
-			vectorP vector4(2, -2);
+			vectorP vector4(2, 2); //actual is 2,-2
 
-			auto star = std::make_unique<Body>(1000000000000.0f, 0.1f, false, vector);
+			auto star = std::make_unique<Body>(1000000000000.0f, 0.1f, true, vector);
 			auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector2, vector4);
 
 			bodys.push_back(std::move(star));
@@ -577,8 +621,10 @@ int main()
 					
 					if (stat == 0)
 					{
+						posOs.resize(bodys.size());
 						for (int i = 0; i < bodys.size(); i++)
 						{
+
 							vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
 
 							if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
@@ -602,6 +648,8 @@ int main()
 					}
 					if (stat == 0)
 					{
+						posOs.resize(bodys.size());
+
 						for (int i = 0; i < posOs.size(); i++)
 						{
 							vectorP Ovec = posOs[i];
@@ -627,6 +675,7 @@ int main()
 
 					if (stat == 1)
 					{
+						posOs.resize(bodys.size());
 						for (int i = 0; i < bodys.size(); i++)
 						{
 							bodys[i]->GetVal();
