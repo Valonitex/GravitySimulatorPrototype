@@ -185,7 +185,7 @@ public:
 
 	void GetVal()
 	{
-		LOG(m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec << "\n" << "---------");
+		LOG(m_Mass <<"\n" << m_radius << "\n" << m_posVec << "\n" << m_velVec << "\n" << m_accVec << "\n" << m_forVec << "\n" << "---------");
 	}
 
 	std::unique_ptr<Body> clone() const
@@ -224,11 +224,11 @@ namespace physics {
 	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		std::vector<std::unique_ptr<Body>> addtobodies;
-
-		for (int i = 0; i < (bodies.size() - 1); i++)
+		int const nBodies = static_cast<int>(std::size(bodies));
+		for (int i = 0; i < (nBodies - 1); i++)
 		{
 			Body& boda = *bodies[i];
-			for (int j = i+1; j < bodies.size(); j++)
+			for (int j = i+1; j < nBodies; j++)
 			{
 				Body& bodb = *bodies[j];
 				double disp = displacement(boda, bodb).mag();
@@ -466,7 +466,7 @@ int main()
 		{
 			vectorP vector(6, 8);
 			vectorP vector2(3, 4);
-			vectorP vector4(2, -2);
+			vectorP vector4(2, 2);
 
 			auto star = std::make_unique<Body>(1000000000000.0f, 0.1f, false, vector);
 			auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector2, vector4);
