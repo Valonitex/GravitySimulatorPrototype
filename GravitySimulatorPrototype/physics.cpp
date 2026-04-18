@@ -222,7 +222,7 @@ namespace physics {
 		//LOG(pullvec);
 	}
 
-	std::vector<std::vector<Body*>> checkCol(std::vector<std::unique_ptr<Body>>& bodies , std::vector<std::vector<Body*>>& colClusters)
+	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies , std::vector<std::vector<Body*>>& colClusters)
 	{
 		std::vector<std::unique_ptr<Body>> addtobodies;
 		int const nBodies = static_cast<int>(std::size(bodies));
@@ -359,7 +359,7 @@ namespace physics {
 
 		
 
-		/*std::vector<std::unique_ptr<Body>> deadBodies;
+		std::vector<std::unique_ptr<Body>> deadBodies;
 		deadBodies.reserve(bodies.size()); // optional but nice
 
 		auto it = bodies.begin();
@@ -374,10 +374,10 @@ namespace physics {
 			else {
 				++it;
 			}
-		}*/
+		}
 
 		
-		auto deadBodies = colClusters;
+
 		colClusters.clear();
 		return deadBodies;
 	}
@@ -514,7 +514,7 @@ int main()
 
 	std::vector<std::unique_ptr<Body>> bodys;
 	std::vector<std::unique_ptr<Body>> delBods;
-	std::vector<std::vector<Body*>> colPairs;
+	std::vector<std::vector<std::unique_ptr<Body>>> colPairs;
 	std::vector<std::vector<Body*>> colClusters;
 
 	int operation;
@@ -618,7 +618,7 @@ int main()
 				{
 					bodys[i]->GetVal();
 				}
-			/*LOG("Dead\n------------");
+			LOG("Dead\n------------");
 
 			for (auto& pair : colPairs)
 			{
@@ -630,7 +630,7 @@ int main()
 						pair[i]->GetVal();
 					}
 				}
-			}*/
+			}
 			LOG("Deleted\n-------------");
 			for (int i = 0; i < delBods.size(); i++)
 			{
@@ -736,7 +736,7 @@ int main()
 					auto killed = (physics::checkCol(bodys,colClusters));
 					if (!killed.empty())
 					{
-						colPairs = killed;
+						colPairs.push_back(std::move(killed));
 					}
 					if (stat == 0)
 					{
@@ -808,7 +808,7 @@ int main()
 				{
 					bodys[i]->GetVal();
 				}
-			/*LOG("Dead\n------------");
+			LOG("Dead\n------------");
 
 			for (auto& pair : colPairs)
 			{
@@ -820,17 +820,7 @@ int main()
 						pair[i]->GetVal();
 					}
 				}
-			}*/
-			LOG("Collision\n-------------")
-			for(int i = 0 ; i < colPairs.size();i++)
-			{
-				LOG("Collision {}", i);
-				for (int j = 0; i < colPairs[i].size(); j++)
-				{
-					colPairs[i][j]->GetVal();
-				}
 			}
-
 			
 			LOG("Deleted\n-------------");
 			for (int i = 0; i < delBods.size(); i++)
