@@ -196,6 +196,11 @@ public:
 
 };
 
+struct CollisionResult {
+	std::vector<std::unique_ptr<Body>> deadBodies;
+	std::vector<std::vector<Body>> clusters;
+};
+
 namespace physics {
 	constexpr double G = 6.67430e-11;
 
@@ -222,9 +227,10 @@ namespace physics {
 		//LOG(pullvec);
 	}
 
-	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies , std::vector<std::vector<Body*>>& colClusters)
+	struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>>& bodies , std::vector<std::vector<Body*>>& colClusters)
 	{
 		std::vector<std::unique_ptr<Body>> addtobodies;
+		std::vector<std::vector<Body>> tempClusters;
 		int const nBodies = static_cast<int>(std::size(bodies));
 		int clusterIndex = 1;
 		for (int i = 0; i < (nBodies - 1); i++)
@@ -341,16 +347,19 @@ namespace physics {
 
 			addtobodies.push_back(std::move(newBody));  // Use the addtobodies vector you already have!
 
+			std::vector<Body> clusterSnapshot;
 			LOG("Collisions\n-----------")
 			{
-				LOG("Cluster %i \n-------------", (i + 1))
+				LOG("Cluster " << i+1 << "\n------------ - ")
 					for (int j = 0; j < colClusters[i].size(); j++)
 					{
 						colClusters[i][j]->GetVal();
+						clusterSnapshot.push_back(*colClusters[i][j]);
 					}
 			}
-		}
+			tempClusters.push_back(clusterSnapshot);
 
+		}
 		// Now add all new bodies after the loop
 		for (auto& nb : addtobodies)
 		{
@@ -376,10 +385,10 @@ namespace physics {
 			}
 		}
 
-		
-
 		colClusters.clear();
-		return deadBodies;
+
+		return { std::move(deadBodies), std::move(tempClusters) };
+
 	}
 
 	void resolve(std::vector<std::unique_ptr<Body>>& bodies)
@@ -516,6 +525,7 @@ int main()
 	std::vector<std::unique_ptr<Body>> delBods;
 	std::vector<std::vector<std::unique_ptr<Body>>> colPairs;
 	std::vector<std::vector<Body*>> colClusters;
+	std::vector<std::vector<Body>> Clusters;
 
 	int operation;
 
@@ -733,7 +743,11 @@ int main()
 					//auto t0 = clock::now();
 
 					physics::move(bodys);
-					auto killed = (physics::checkCol(bodys,colClusters));
+					auto colData = (physics::checkCol(bodys,colClusters));
+					auto killed = std::move(colData.deadBodies);
+					auto newClusters = std::move(colData.clusters);
+					for (auto& c : newClusters)
+						Clusters.push_back(std::move(c));
 					if (!killed.empty())
 					{
 						colPairs.push_back(std::move(killed));
@@ -821,7 +835,19 @@ int main()
 					}
 				}
 			}
-			
+			LOG("Collisions\n--------------")
+			{
+				for (int i = 0; i < Clusters.size(); i++)
+				{
+					LOG("Collision" << i)
+					for (int j = 0 ; j< Clusters[i].size();j++)
+					{
+						Clusters[i][j].GetVal();
+					}
+				}
+			}
+
+
 			LOG("Deleted\n-------------");
 			for (int i = 0; i < delBods.size(); i++)
 			{
