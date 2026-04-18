@@ -158,6 +158,7 @@ public:
 	vectorP m_forRes;
 	double m_radius;
 	double m_Mass;
+	int clusterIndex = 0;
 
 public:
 	Body(double m, double r, bool stat = true, vectorP pos = { 0,0 }, vectorP vel = { 0,0 }, vectorP f = { 0,0 }) //stat = static
@@ -221,22 +222,64 @@ namespace physics {
 		//LOG(pullvec);
 	}
 
-	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies)
+	std::vector<std::unique_ptr<Body>> checkCol(std::vector<std::unique_ptr<Body>>& bodies , std::vector<std::vector<Body*>>& colClusters)
 	{
 		std::vector<std::unique_ptr<Body>> addtobodies;
 		int const nBodies = static_cast<int>(std::size(bodies));
+		int clusterIndex = 1;
 		for (int i = 0; i < (nBodies - 1); i++)
 		{
+			
 			Body& boda = *bodies[i];
+			int& clusInA = boda.clusterIndex;
 			for (int j = i+1; j < nBodies; j++)
 			{
 				Body& bodb = *bodies[j];
 				double disp = displacement(boda, bodb).mag();
 				double mindisp = boda.m_radius + bodb.m_radius;
+				int& clusInB = bodb.clusterIndex;
+				
+				
 
 				if (disp < mindisp)
 				{
-					float newMass = boda.m_Mass + bodb.m_Mass;
+					if (clusInA == 0 && clusInB == 0)//cluster formation
+					{
+						clusInA = clusInB = clusterIndex;
+						std::vector<Body*> clusterTBP;
+						clusterTBP.push_back(bodies[i].get());
+						clusterTBP.push_back(bodies[j].get());
+						colClusters.push_back(clusterTBP);
+						clusterIndex++;
+					}
+
+					if (clusInA != clusInB /* && clusInA != 0 && clusInB != 0*/) //could potentially remove clusInB != 0 , as it doesnt matter in the case A is not zero and not equal to it
+					{
+						if (clusInB == 0) //cluster expansion
+							clusInB = clusInA;
+						if (clusInA == 0)
+							clusInA = clusInB;
+
+						if (clusInA < clusInB) //cluster coallition
+						{
+							auto& clusterB = colClusters[clusInB - 1];
+							for (int i = 0; i < clusterB.size() ; i++)
+							{
+								(*clusterB[i]).clusterIndex = clusInA;
+							}
+						}
+						if (clusInA > clusInB) //cluster coallition
+						{
+
+							auto& clusterA = colClusters[clusInA - 1];
+							for (int i = 0; i < clusterA.size(); i++)
+							{
+								(*clusterA[i]).clusterIndex = clusInB;
+							}
+						}
+					}
+					
+					/*float newMass = boda.m_Mass + bodb.m_Mass;
 					vectorP newPos = (boda.m_posVec + bodb.m_posVec) / 2;
 					vectorP newVec = ((boda.m_velVec * boda.m_Mass ) + (bodb.m_velVec * bodb.m_Mass)) / newMass;
 					vectorP newFor = (boda.m_forVec + bodb.m_forVec) / 2; 
@@ -248,10 +291,51 @@ namespace physics {
 					//boda.GetVal();
 					//bodb.GetVal();
 					bodb.dead = true;
-					bodies.push_back(std::move(newBody));
+					bodies.push_back(std::move(newBody));*/
 				}
+
+			}
+			//clusterIndex++;
+		}
+		colClusters.clear();
+		colClusters.resize(clusterIndex - 1);
+		for (int j = 0; j < bodies.size(); j++)
+		{
+			if ((*bodies[j]).clusterIndex > 0 )
+			{
+				colClusters[(*bodies[j]).clusterIndex - 1].push_back(bodies[j].get());
 			}
 		}
+
+		for (int i = 0; i < colClusters.size() ; i++)
+		{
+			
+			Body& boda = (*(colClusters[i][0]));
+			for (int k = 1 ; k < colClusters[i].size(); k++)
+			{
+				Body& bodb = (*(colClusters[i][k]));
+				float newMass = boda.m_Mass + bodb.m_Mass;
+				vectorP newPos = (boda.m_posVec + bodb.m_posVec) / 2;
+				vectorP newVel = ((boda.m_velVec * boda.m_Mass) + (bodb.m_velVec * bodb.m_Mass)) / newMass;
+				vectorP newFor = (boda.m_forVec + bodb.m_forVec) / 2;
+				double newRadius = pow(boda.m_radius * boda.m_radius * boda.m_radius + bodb.m_radius * bodb.m_radius * bodb.m_radius, 1.0f / 3.0f);
+					
+				boda.m_Mass = newMass;
+				boda.m_posVec = newPos;
+				boda.m_velVec = newVel;
+				boda.m_forVec = newFor;
+				boda.m_radius = newRadius;
+
+				bodb.dead = true;
+			}
+			boda.dead = true;
+			
+			auto newBody = std::make_unique<Body>(boda);
+			bodies.push_back(std::move(newBody));
+		}
+
+		
+
 		std::vector<std::unique_ptr<Body>> deadBodies;
 		deadBodies.reserve(bodies.size()); // optional but nice
 
@@ -333,11 +417,11 @@ BodyInput getValBod()
 {
 	BodyInput temp;
 
-	int x;
+	float x;
 	std::cout << "Position Coord (X) :";
 	std::cin >> x;
 
-	int y;
+	float y;
 	std::cout << "Position Coord (Y) :";
 	std::cin >> y;
 
@@ -405,6 +489,7 @@ int main()
 	std::vector<std::unique_ptr<Body>> bodys;
 	std::vector<std::unique_ptr<Body>> delBods;
 	std::vector<std::vector<std::unique_ptr<Body>>> colPairs;
+	std::vector<std::vector<Body*>> colClusters;
 
 	int operation;
 
@@ -464,15 +549,17 @@ int main()
 
 		if (operation == 5)
 		{
-			vectorP vector(6, 8);
-			vectorP vector2(3, 4);
-			vectorP vector4(2, 2);
+			vectorP vector(3, 3);
+			vectorP vector2(3.5, 3.5);
+			vectorP vector4(2.5, 2.5);
 
-			auto star = std::make_unique<Body>(1000000000000.0f, 0.1f, false, vector);
-			auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector2, vector4);
+			auto star = std::make_unique<Body>(1000.0f, 2.0f, false, vector);
+			auto perf = std::make_unique<Body>(1000.0f, 0.2f, true, vector2);
+			auto nig = std::make_unique<Body>(1000.0f, 0.2f, true, vector4);
 
 			bodys.push_back(std::move(star));
 			bodys.push_back(std::move(perf));
+			bodys.push_back(std::move(nig));
 
 			LOG("-----")
 			LOG("Alive\n------------")
@@ -595,7 +682,7 @@ int main()
 					//auto t0 = clock::now();
 
 					physics::move(bodys);
-					auto killed = (physics::checkCol(bodys));
+					auto killed = (physics::checkCol(bodys,colClusters));
 					if (!killed.empty())
 					{
 						colPairs.push_back(std::move(killed));
