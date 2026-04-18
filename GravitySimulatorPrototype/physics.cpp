@@ -267,6 +267,7 @@ namespace physics {
 							{
 								(*clusterB[i]).clusterIndex = clusInA;
 							}
+							clusterB.clear();
 						}
 						if (clusInA > clusInB) //cluster coallition
 						{
@@ -276,6 +277,7 @@ namespace physics {
 							{
 								(*clusterA[i]).clusterIndex = clusInB;
 							}
+							clusterA.clear();
 						}
 					}
 					
@@ -299,6 +301,9 @@ namespace physics {
 		}
 		colClusters.clear();
 		colClusters.resize(clusterIndex - 1);
+
+		bodies.reserve(bodies.size() + colClusters.size());
+
 		for (int j = 0; j < bodies.size(); j++)
 		{
 			if ((*bodies[j]).clusterIndex > 0 )
@@ -307,11 +312,12 @@ namespace physics {
 			}
 		}
 
-		for (int i = 0; i < colClusters.size() ; i++)
+		for (int i = 0; i < colClusters.size(); i++)
 		{
-			
-			Body& boda = (*(colClusters[i][0]));
-			for (int k = 1 ; k < colClusters[i].size(); k++)
+			if (colClusters[i].empty()) continue;
+			Body boda = (*(colClusters[i][0]));
+
+			for (int k = 1; k < colClusters[i].size(); k++)
 			{
 				Body& bodb = (*(colClusters[i][k]));
 				float newMass = boda.m_Mass + bodb.m_Mass;
@@ -319,19 +325,36 @@ namespace physics {
 				vectorP newVel = ((boda.m_velVec * boda.m_Mass) + (bodb.m_velVec * bodb.m_Mass)) / newMass;
 				vectorP newFor = (boda.m_forVec + bodb.m_forVec) / 2;
 				double newRadius = pow(boda.m_radius * boda.m_radius * boda.m_radius + bodb.m_radius * bodb.m_radius * bodb.m_radius, 1.0f / 3.0f);
-					
+
 				boda.m_Mass = newMass;
 				boda.m_posVec = newPos;
 				boda.m_velVec = newVel;
 				boda.m_forVec = newFor;
 				boda.m_radius = newRadius;
-
 				bodb.dead = true;
 			}
-			boda.dead = true;
-			
+
+			(*(colClusters[i][0])).dead = true;
 			auto newBody = std::make_unique<Body>(boda);
-			bodies.push_back(std::move(newBody));
+			newBody->clusterIndex = 0;
+			newBody->dead = false;
+
+			addtobodies.push_back(std::move(newBody));  // Use the addtobodies vector you already have!
+
+			LOG("Collisions\n-----------")
+			{
+				LOG("Cluster %i \n-------------", (i + 1))
+					for (int j = 0; j < colClusters[i].size(); j++)
+					{
+						colClusters[i][j]->GetVal();
+					}
+			}
+		}
+
+		// Now add all new bodies after the loop
+		for (auto& nb : addtobodies)
+		{
+			bodies.push_back(std::move(nb));
 		}
 
 		
@@ -353,6 +376,9 @@ namespace physics {
 			}
 		}
 
+		
+
+		colClusters.clear();
 		return deadBodies;
 	}
 
@@ -553,13 +579,38 @@ int main()
 			vectorP vector2(3.5, 3.5);
 			vectorP vector4(2.5, 2.5);
 
-			auto star = std::make_unique<Body>(1000.0f, 2.0f, false, vector);
-			auto perf = std::make_unique<Body>(1000.0f, 0.2f, true, vector2);
-			auto nig = std::make_unique<Body>(1000.0f, 0.2f, true, vector4);
+			vectorP vector1(17, 17);
+			vectorP vector21(17.5, 17.5);
+			vectorP vector41(16.5, 16.5);
+
+			vectorP vector11(10, 8);
+			vectorP vector211(1, 17.5);
+			vectorP vector411(16.5, 2.5);
+
+			auto star = std::make_unique<Body>(1000000000000.0f, 2.0f, true, vector);
+			auto perf = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector2);
+			auto nig = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector4);
+
+
+			auto star1 = std::make_unique<Body>(1000000000000.0f, 2.0f, true, vector1);
+			auto perf1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector21);
+			auto nig1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector41);
+			
+			auto star11 = std::make_unique<Body>(1000000000000.0f, 2.0f, true, vector11);
+			auto perf11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector211);
+			auto nig11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector411);
 
 			bodys.push_back(std::move(star));
 			bodys.push_back(std::move(perf));
 			bodys.push_back(std::move(nig));
+
+			bodys.push_back(std::move(star1));
+			bodys.push_back(std::move(perf1));
+			bodys.push_back(std::move(nig1));
+
+			bodys.push_back(std::move(star11));
+			bodys.push_back(std::move(perf11));
+			bodys.push_back(std::move(nig11));
 
 			LOG("-----")
 			LOG("Alive\n------------")
@@ -770,6 +821,7 @@ int main()
 					}
 				}
 			}
+			
 			LOG("Deleted\n-------------");
 			for (int i = 0; i < delBods.size(); i++)
 			{
