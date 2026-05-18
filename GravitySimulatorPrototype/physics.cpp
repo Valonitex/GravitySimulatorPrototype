@@ -790,7 +790,7 @@ int main()
 						drawGrid(livyud);
 						LOG("----------------------------");
 					}
-
+//a 
 
 					auto t1 = clock::now();
 					auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
