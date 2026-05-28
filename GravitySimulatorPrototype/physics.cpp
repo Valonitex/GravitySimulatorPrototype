@@ -740,7 +740,8 @@ int main()
 					}
 
 					frame++;
-					auto t0 = clock::now(); //iteration
+					//this is for the work ms , comment it out
+					//auto t0 = clock::now(); //iteration
 
 					physics::move(bodys);
 					auto colData = (physics::checkCol(bodys,colClusters));
@@ -791,12 +792,12 @@ int main()
 						LOG("----------------------------");
 					}
 //valinuxitexherea 
-
-					auto t1 = clock::now();
+					//these are the work ms times , comment out till log
+					/*auto t1 = clock::now();
 					auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
 					double dt_ms = dt * 1000000.0f;
-					LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
-					
+					LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");*/
+
 					nextFrame += dt_duration;
 					std::this_thread::sleep_until(nextFrame);
 
