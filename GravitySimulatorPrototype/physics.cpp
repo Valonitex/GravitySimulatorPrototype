@@ -176,7 +176,7 @@ public:
 	{
 		m_forVec = m_forRes;
 		m_accVec = m_forVec / m_Mass;
-		m_forRes = (0, 0);
+		m_forRes = vectorP(0.0f, 0.0f);
 	}
 
 	void forsum(vectorP force)
