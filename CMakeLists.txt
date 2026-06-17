@@ -14,6 +14,10 @@ add_executable(OpenGLingsim
         OpenGL/src/IndexBuffer.cpp
         OpenGL/src/VertexBuffer.cpp
         OpenGL/src/Renderer.cpp
+        OpenGL/src/VertexArray.cpp
+        OpenGL/src/Shader.cpp
+        OpenGL/src/Renderer.cpp
+        #OpenGL/src/
 )
 
 target_include_directories(GsimTerm PRIVATE GravitySimulatorPrototype)
