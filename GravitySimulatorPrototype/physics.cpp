@@ -568,7 +568,17 @@ int main()
 
 		if (operation == 3)
 		{
-			LOG("-----")
+			vectorP vector(3,4);
+			vectorP vector2(6, 8);
+			vectorP vector3(2,-2);
+
+			auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector2);
+			auto perf = std::make_unique<Body>(1000.0f, 0.1f, true, vector, vector3);
+
+			bodys.push_back(std::move(star));
+			bodys.push_back(std::move(perf));
+
+			/*LOG("-----")
 			getValArr(bodys);
 			int bsize = bodys.size();
 
@@ -580,33 +590,39 @@ int main()
 			} while (b >= bsize || b < 0);
 
 			delBods.push_back(std::move(bodys[b]));
-			bodys.erase(bodys.begin() + b);
+			bodys.erase(bodys.begin() + b);*/
 		}
 
 		if (operation == 5)
 		{
-			vectorP vector(3, 3);
-			vectorP vector2(3.5, 3.5);
-			vectorP vector4(2.5, 2.5);
+			/*vectorP vector(3, 3);
+			vectorP vector2(6, 6);
+			vectorP vector4(-1, -1);
 
 			vectorP vector1(17, 17);
-			vectorP vector21(17.5, 17.5);
-			vectorP vector41(16.5, 16.5);
+			vectorP vector21(23, 17.5);
+			vectorP vector41(11, 11);
 
 			vectorP vector11(10, 8);
 			vectorP vector211(1, 17.5);
-			vectorP vector411(16.5, 2.5);
+			vectorP vector411(20, 0);
 
-			auto star = std::make_unique<Body>(1000000000000.0f, 2.0f, true, vector);
-			auto perf = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector2);
-			auto nig = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector4);
+			vectorP vector0(3, 3);
+			vectorP vector20(6, 6);
+			vectorP vector40(-1, -1);
 
 
-			auto star1 = std::make_unique<Body>(1000000000000.0f, 2.0f, true, vector1);
-			auto perf1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector21);
-			auto nig1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector41);
+
+			auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector);
+			auto perf = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector2,vector20);
+			auto nig = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector4,vector40);
+
+
+			auto star1 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector1);
+			auto perf1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector21,vector0);
+			auto nig1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector41, vector40);
 			
-			auto star11 = std::make_unique<Body>(1000000000000.0f, 2.0f, true, vector11);
+			auto star11 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector11, vector40);
 			auto perf11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector211);
 			auto nig11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector411);
 
@@ -620,7 +636,38 @@ int main()
 
 			bodys.push_back(std::move(star11));
 			bodys.push_back(std::move(perf11));
-			bodys.push_back(std::move(nig11));
+			bodys.push_back(std::move(nig11));*/
+
+			float mass = 100000000000.0f;
+
+			/*vectorP pos1( 0.97f,  -0.2430f);
+			vectorP pos2(-0.97f,   0.2430f);
+			vectorP pos3( 0.0f,    0.0f);
+
+			vectorP vel1( 0.4662f,   0.4323f);
+			vectorP vel2( 0.4662,    0.4323f);
+			vectorP vel3(-0.24f,  -0.8647f);
+
+			auto star11 = std::make_unique<Body>(mass, 0.1f,  true, pos1, vel1);
+			auto perf11 = std::make_unique<Body>(mass, 0.1f, true, pos2, vel2);
+			auto nig11  = std::make_unique<Body>(mass, 0.1f, true, pos3, vel3);
+
+			bodys.push_back(std::move(star11));
+			bodys.push_back(std::move(perf11));
+			bodys.push_back(std::move(nig11));*/
+
+			vectorP pos1( 2.0f,  2.0f);
+			vectorP pos2(-2.0f,   -2.0f);
+
+
+			vectorP vel1( 0,   -0.4323f);
+			vectorP vel2( 0,    0.4323f);
+
+			auto star11 = std::make_unique<Body>(mass, 0.1f,  true, pos1, vel1);
+			auto perf11 = std::make_unique<Body>(mass, 0.1f, true, pos2, vel2);
+
+			bodys.push_back(std::move(star11));
+			bodys.push_back(std::move(perf11));
 
 			LOG("-----")
 			LOG("Alive\n------------")
@@ -680,6 +727,8 @@ int main()
 				std::cin >> fps;
 			}
 
+
+
 			std::vector<std::unique_ptr<Body>> bodOs;
 			bodOs.reserve(bodys.size());
 			for (const auto& b : bodys) // reference is important as otherwise itll try to copy a unique_ptr into b
@@ -702,120 +751,168 @@ int main()
 			//std::vector<char> livyurc(21, '.'); 
 			//std::vector<std::vector<char>> livyudc(21, livyurc);
 
+			InitWindow(1280 , 720 , "oto");
+			SetTargetFPS(fps);
+
+			Camera3D camera = { 0 };
+			camera.position   = { 0.0f, 50.0f, 0.0f };  // directly above the scene, looking straight down
+			camera.target     = { 0.0f, 0.0f, 0.0f };   // looking down at the origin
+			camera.up         = { 0.0f, 0.0f, -1.0f };  // see note below -- this can't be (0,1,0) anymore
+			camera.fovy       = 40.0f;                  // now means "view height in world units," not degrees
+			camera.projection = CAMERA_PERSPECTIVE;    // flat 2D-style view, no perspective foreshortening
+
+			const Vector3 planeCenter = { 0.0f, 0.0f, 0.0f }; // World-space center of the plane
+			const Vector2 planeSize   = { 8.0f, 4.5f };       // Width (X) and length (Z) of the plane
+
 			int rerun = 1;
 
-			do 
+			do
 			{
-				bodys.clear();
-				bodys.reserve(bodOs.size());
-				for (const auto& b : bodOs)
-					bodys.push_back(b ? b->clone() : nullptr);
 
-				std::chrono::duration<double> duration(dur);
 
-				auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
-
-				auto start = clock::now();
-				auto end = start + duration;
-				auto nextFrame = start;
-				int frame = 0;
-
-				while (clock::now() < end && bodys.size() > 0)
+				while (!WindowShouldClose())
 				{
-					
-					if (stat == 0)
+
+
+					bodys.clear();
+					bodys.reserve(bodOs.size());
+					for (const auto& b : bodOs)
+						bodys.push_back(b ? b->clone() : nullptr);
+
+					std::chrono::duration<double> duration(dur);
+
+					auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
+
+					auto start = clock::now();
+					auto end = start + duration;
+					auto nextFrame = start;
+					int frame = 0;
+
+					while (clock::now() < end && bodys.size() > 0)
 					{
-						for (int i = 0; i < bodys.size(); i++)
+
+						if (stat == 0)
 						{
-							vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
-
-							if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
+							for (int i = 0; i < bodys.size(); i++)
 							{
-								tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since 
-								//the coords dont match ovec 0,0 will still be "." ahahhaahah
-							}
+								vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
 
-							posOs[i] = tbpv;
-						}
-					}
-
-					frame++;
-					//this is for the work ms , comment it out
-					//auto t0 = clock::now(); //iteration
-
-					physics::move(bodys);
-					auto colData = (physics::checkCol(bodys,colClusters));
-					auto killed = std::move(colData.deadBodies);
-					auto newClusters = std::move(colData.clusters);
-					for (auto& c : newClusters)
-						Clusters.push_back(std::move(c));
-					if (!killed.empty())
-					{
-						colPairs.push_back(std::move(killed));
-					}
-					if (stat == 0)
-					{
-						for (int i = 0; i < posOs.size(); i++)
-						{
-							vectorP Ovec = posOs[i];
-							bool booly = false;
-							for (int j = 0; j < bodys.size(); j++)
-							{
-								booly = (Ovec == bodys[j]->m_posVec.round());
-								if (booly == true)
+								if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
 								{
-									break;
+									tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since
+									//the coords dont match ovec 0,0 will still be "." ahahhaahah
+								}
+
+								posOs[i] = tbpv;
+							}
+						}
+
+						frame++;
+						auto t0 = clock::now(); //iteration
+
+						BeginDrawing();
+						ClearBackground(RAYWHITE);
+
+						BeginMode3D(camera);
+
+						for (int i = 0 ;  i < bodys.size(); i++)
+						{
+							std::unique_ptr temu = bodys[i]->clone();
+							float temx = temu->m_posVec.icap;
+							float temy = temu->m_posVec.jcap;
+							float temr = temu->m_radius;
+							DrawSphere(Vector3(temx,0, temy) , temr , RED);
+
+						}
+						DrawGrid(50, 1.0f);
+						EndMode3D();
+						EndDrawing();
+
+						physics::move(bodys);
+						auto colData = (physics::checkCol(bodys,colClusters));
+						auto killed = std::move(colData.deadBodies);
+						auto newClusters = std::move(colData.clusters);
+						for (auto& c : newClusters)
+							Clusters.push_back(std::move(c));
+						if (!killed.empty())
+						{
+							colPairs.push_back(std::move(killed));
+						}
+						if (stat == 0)
+						{
+							for (int i = 0; i < posOs.size(); i++)
+							{
+								vectorP Ovec = posOs[i];
+								bool booly = false;
+								for (int j = 0; j < bodys.size(); j++)
+								{
+									booly = (Ovec == bodys[j]->m_posVec.round());
+									if (booly == true)
+									{
+										break;
+									}
+								}
+								if (booly == false)
+								{
+									livyud[Ovec.jcap][Ovec.icap] = '.';
+								}
+								else
+								{
+									livyud[Ovec.jcap][Ovec.icap] = 'O';
 								}
 							}
-							if (booly == false)
-							{
-								livyud[Ovec.jcap][Ovec.icap] = '.';
-							}
-							else
-							{
-								livyud[Ovec.jcap][Ovec.icap] = 'O';
-							}
 						}
-					}
 
-					if (stat == 1)
-					{
-						for (int i = 0; i < bodys.size(); i++)
+						if (stat == 1)
 						{
-							bodys[i]->GetVal();
+							for (int i = 0; i < bodys.size(); i++)
+							{
+								bodys[i]->GetVal();
+							}
+						}
+
+						if (stat == 0 && (frame % int((1/dt)/fps)) == 0)
+						{
+							drawGrid(livyud);
+							LOG("----------------------------");
+						}
+	//valinuxitexherea
+						//these are the work ms times , comment out till log
+						auto t1 = clock::now();
+						auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+						double dt_ms = dt * 1000000.0f;
+						LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
+	//this is for the work ms , comment it out
+	//auto t0 = clock::now(); //iteration
+						nextFrame += dt_duration;
+						std::this_thread::sleep_until(nextFrame);
+
+					}
+
+					std::cout << "Rerun ? (0/1)";
+					std::cin >> rerun;
+
+					if (rerun == 0)
+					{
+						break;
+					}
+
+					if (rerun == 1)
+					{
+						std::vector<char> dots(21, '.');
+						for (int i = 0; i < 21; i++)
+						{
+							livyud[i] = dots;
 						}
 					}
 
-					if (stat == 0 && frame % fps == 0)
-					{
-						drawGrid(livyud);
-						LOG("----------------------------");
-					}
-//valinuxitexherea 
-					//these are the work ms times , comment out till log
-					/*auto t1 = clock::now();
-					auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
-					double dt_ms = dt * 1000000.0f;
-					LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");*/
-
-					nextFrame += dt_duration;
-					std::this_thread::sleep_until(nextFrame);
-
 				}
 
-				std::cout << "Rerun ? (0/1)";
-				std::cin >> rerun;
-
-				if (rerun == 1)
-				{
-					std::vector<char> dots(21, '.');
-					for (int i = 0; i < 21; i++)
-					{
-						livyud[i] = dots;
-					}
-				}
 
 			} while (rerun == 1);
+
+			CloseWindow();
+
 
 			drawGrid(livyud);
 			LOG("Alive\n--------------")

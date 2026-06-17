@@ -11,6 +11,7 @@
 #include <thread>
 #include <chrono>
 #include <math.h>
+#include "raylib.h"
 
 #define LOG(x) std::cout << x << std::endl;
 
