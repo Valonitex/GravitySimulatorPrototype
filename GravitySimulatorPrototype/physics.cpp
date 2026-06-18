@@ -1,5 +1,7 @@
 //hi
 
+#include <filesystem>
+
 #include "EndBrace.h"
 
 double dt = (1.0f / 120.0f);
@@ -269,9 +271,9 @@ namespace physics {
 						if (clusInA < clusInB) //cluster coallition
 						{
 							auto& clusterB = colClusters[clusInB - 1];
-							for (int i = 0; i < clusterB.size() ; i++)
+							for (int k = 0; k < clusterB.size() ; k++)
 							{
-								(*clusterB[i]).clusterIndex = clusInA;
+								(*clusterB[k]).clusterIndex = clusInA;
 							}
 							clusterB.clear();
 						}
@@ -279,9 +281,9 @@ namespace physics {
 						{
 
 							auto& clusterA = colClusters[clusInA - 1];
-							for (int i = 0; i < clusterA.size(); i++)
+							for (int k = 0; k < clusterA.size(); k++)
 							{
-								(*clusterA[i]).clusterIndex = clusInB;
+								(*clusterA[k]).clusterIndex = clusInB;
 							}
 							clusterA.clear();
 						}
@@ -718,8 +720,12 @@ int main()
 		{
 			LOG("-----")
 			float dur;
-			std::cout << "Runtime:";
-			std::cin >> dur;
+			do
+			{
+				std::cout << "Runtime:";
+				std::cin >> dur;
+
+			}while ( dur <= 0);
 
 			float noofnd = (1/dt) * dur;
 
@@ -730,6 +736,13 @@ int main()
 				std::cin >> stat;
 			} while (stat < 0 || stat > 2);
 
+			int Draw;
+			do
+			{
+				std::cout << "Draw ? (0/1)";
+				std::cin >> Draw;
+
+			}while ( Draw > 1 || Draw < 0 );
 
 			int fps;
 			if(stat==0)
@@ -744,7 +757,7 @@ int main()
 			bodOs.reserve(bodys.size());
 			for (const auto& b : bodys) // reference is important as otherwise itll try to copy a unique_ptr into b
 				bodOs.push_back(b ? b->clone() : nullptr);
-			
+
 			std::vector<vectorP> posOs(bodys.size());
 
 
@@ -780,52 +793,212 @@ int main()
 
 			if (stat != 2)
 			{
+				do
+				{
+					while (!WindowShouldClose())
+					{
+
+
+						bodys.clear();
+						bodys.reserve(bodOs.size());
+						for (const auto& b : bodOs)
+							bodys.push_back(b ? b->clone() : nullptr);
+
+						std::chrono::duration<double> duration(dur);
+
+						auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
+
+						auto start = clock::now();
+						auto end = start + duration;
+						auto nextFrame = start;
+						int frame = 0;
+
+						while (clock::now() < end && bodys.size() > 0)
+						{
+
+							if (stat == 0)
+							{
+								for (int i = 0; i < bodys.size(); i++)
+								{
+									vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
+
+									if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
+									{
+										tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since
+										//the coords dont match ovec 0,0 will still be "." ahahhaahah
+									}
+
+									posOs[i] = tbpv;
+								}
+							}
+
+							frame++;
+							auto t0 = clock::now(); //iteration
+
+							if (Draw == 1)
+							{
+								BeginDrawing();
+								ClearBackground(RAYWHITE);
+
+								BeginMode3D(camera);
+
+								for (int i = 0 ;  i < bodys.size(); i++)
+								{
+									std::unique_ptr temu = bodys[i]->clone();
+									float temx = temu->m_posVec.icap;
+									float temy = temu->m_posVec.jcap;
+									float temr = temu->m_radius;
+									DrawSphere(Vector3(temx,0, temy) , temr , RED);
+
+								}
+								DrawGrid(50, 1.0f);
+								EndMode3D();
+								EndDrawing();
+
+							}
+
+							physics::move(bodys);
+							auto colData = (physics::checkCol(bodys,colClusters));
+							auto killed = std::move(colData.deadBodies);
+							auto newClusters = std::move(colData.clusters);
+							for (auto& c : newClusters)
+								Clusters.push_back(std::move(c));
+							if (!killed.empty())
+							{
+								colPairs.push_back(std::move(killed));
+							}
+							if (stat == 0)
+							{
+								for (int i = 0; i < posOs.size(); i++)
+								{
+									vectorP Ovec = posOs[i];
+									bool booly = false;
+									for (int j = 0; j < bodys.size(); j++)
+									{
+										booly = (Ovec == bodys[j]->m_posVec.round());
+										if (booly == true)
+										{
+											break;
+										}
+									}
+									if (booly == false)
+									{
+										livyud[Ovec.jcap][Ovec.icap] = '.';
+									}
+									else
+									{
+										livyud[Ovec.jcap][Ovec.icap] = 'O';
+									}
+								}
+							}
+
+							if (stat == 1)
+							{
+								for (int i = 0; i < bodys.size(); i++)
+								{
+									bodys[i]->GetVal();
+								}
+							}
+
+							if (stat == 0 && (frame % int((1/dt)/fps)) == 0)
+							{
+								drawGrid(livyud);
+								LOG("----------------------------");
+							}
+		//valinuxitexherea
+							//these are the work ms times , comment out till log
+							auto t1 = clock::now();
+							auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+							double dt_ms = dt * 1000000.0f;
+							LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
+		//this is for the work ms , comment it out
+		//auto t0 = clock::now(); //iteration
+							nextFrame += dt_duration;
+							std::this_thread::sleep_until(nextFrame);
+
+						}
+
+						std::cout << "Rerun ? (0/1)";
+						std::cin >> rerun;
+
+						if (rerun == 0)
+						{
+							break;
+						}
+
+						if (rerun == 1)
+						{
+							Clusters.clear();
+							colPairs.clear();
+							std::vector<char> dots(21, '.');
+							for (int i = 0; i < 21; i++)
+							{
+								livyud[i] = dots;
+							}
+						}
+
+					}
+
+
+				} while (rerun == 1);
 
 			}
-			do
+
+			if (stat == 2)
 			{
-
-
-				while (!WindowShouldClose())
+				do
 				{
-
+					auto t0 = clock::now();
 
 					bodys.clear();
 					bodys.reserve(bodOs.size());
 					for (const auto& b : bodOs)
 						bodys.push_back(b ? b->clone() : nullptr);
 
-					std::chrono::duration<double> duration(dur);
-
-					auto dt_duration = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(dt));
-
-					auto start = clock::now();
-					auto end = start + duration;
-					auto nextFrame = start;
 					int frame = 0;
 
-					while (clock::now() < end && bodys.size() > 0)
+					while (frame < noofnd && bodys.size() > 0)
 					{
-
-						if (stat == 0)
-						{
-							for (int i = 0; i < bodys.size(); i++)
-							{
-								vectorP tbpv = bodys[i]->m_posVec.round();  //tbpv = temporary bodies postition vector
-
-								if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 || tbpv.jcap > 20)
-								{
-									tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its ovec is 0 and since
-									//the coords dont match ovec 0,0 will still be "." ahahhaahah
-								}
-
-								posOs[i] = tbpv;
-							}
-						}
-
 						frame++;
-						auto t0 = clock::now(); //iteration
 
+						/*BeginDrawing();
+						ClearBackground(RAYWHITE);
+
+						BeginMode3D(camera);
+
+						for (int i = 0 ;  i < bodys.size(); i++)
+						{
+							std::unique_ptr temu = bodys[i]->clone();
+							float temx = temu->m_posVec.icap;
+							float temy = temu->m_posVec.jcap;
+							float temr = temu->m_radius;
+							DrawSphere(Vector3(temx,0, temy) , temr , RED);
+
+						}
+						DrawGrid(50, 1.0f);
+						EndMode3D();
+						EndDrawing();*/
+
+
+						physics::move(bodys);
+						auto colData = (physics::checkCol(bodys,colClusters));
+						auto killed = std::move(colData.deadBodies);
+						auto newClusters = std::move(colData.clusters);
+						for (auto& c : newClusters)
+							Clusters.push_back(std::move(c));
+						if (!killed.empty())
+						{
+							colPairs.push_back(std::move(killed));
+						}
+					}
+
+					auto t1 = clock::now();
+					auto work_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+					LOG("work_ms = " << work_us << " dt_us = " << dur * 1000000 << "\n");
+
+
+					if (Draw == 1)
+					{
 						BeginDrawing();
 						ClearBackground(RAYWHITE);
 
@@ -843,66 +1016,34 @@ int main()
 						DrawGrid(50, 1.0f);
 						EndMode3D();
 						EndDrawing();
+					}
 
-						physics::move(bodys);
-						auto colData = (physics::checkCol(bodys,colClusters));
-						auto killed = std::move(colData.deadBodies);
-						auto newClusters = std::move(colData.clusters);
-						for (auto& c : newClusters)
-							Clusters.push_back(std::move(c));
-						if (!killed.empty())
+					LOG("Alive\n--------------")
+					for (int i = 0; i < bodys.size(); i++)
+					{
+						bodys[i]->GetVal();
+					}
+
+					LOG("Dead\n------------");
+					for (auto& pair : colPairs)
+					{
+						int psize = pair.size();
+						if (psize >= 2)
 						{
-							colPairs.push_back(std::move(killed));
-						}
-						if (stat == 0)
-						{
-							for (int i = 0; i < posOs.size(); i++)
+							for (int i = 0; i < psize; i++)
 							{
-								vectorP Ovec = posOs[i];
-								bool booly = false;
-								for (int j = 0; j < bodys.size(); j++)
-								{
-									booly = (Ovec == bodys[j]->m_posVec.round());
-									if (booly == true)
-									{
-										break;
-									}
-								}
-								if (booly == false)
-								{
-									livyud[Ovec.jcap][Ovec.icap] = '.';
-								}
-								else
-								{
-									livyud[Ovec.jcap][Ovec.icap] = 'O';
-								}
+								pair[i]->GetVal();
 							}
 						}
-
-						if (stat == 1)
+					}
+					LOG("Collisions\n--------------")
+					for (int i = 0; i < Clusters.size(); i++)
+					{
+						LOG("Collision" << i)
+						for (int j = 0 ; j< Clusters[i].size();j++)
 						{
-							for (int i = 0; i < bodys.size(); i++)
-							{
-								bodys[i]->GetVal();
-							}
+							Clusters[i][j].GetVal();
 						}
-
-						if (stat == 0 && (frame % int((1/dt)/fps)) == 0)
-						{
-							drawGrid(livyud);
-							LOG("----------------------------");
-						}
-	//valinuxitexherea
-						//these are the work ms times , comment out till log
-						auto t1 = clock::now();
-						auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
-						double dt_ms = dt * 1000000.0f;
-						LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
-	//this is for the work ms , comment it out
-	//auto t0 = clock::now(); //iteration
-						nextFrame += dt_duration;
-						std::this_thread::sleep_until(nextFrame);
-
 					}
 
 					std::cout << "Rerun ? (0/1)";
@@ -913,19 +1054,9 @@ int main()
 						break;
 					}
 
-					if (rerun == 1)
-					{
-						std::vector<char> dots(21, '.');
-						for (int i = 0; i < 21; i++)
-						{
-							livyud[i] = dots;
-						}
-					}
+				} while (rerun == 1);
 
-				}
-
-
-			} while (rerun == 1);
+			}
 
 			CloseWindow();
 
