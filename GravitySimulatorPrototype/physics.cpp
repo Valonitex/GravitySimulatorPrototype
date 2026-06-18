@@ -321,31 +321,40 @@ namespace physics {
 		for (int i = 0; i < colClusters.size(); i++)
 		{
 			if (colClusters[i].empty()) continue;
-			Body boda = (*(colClusters[i][0]));
+			//Body boda = (*(colClusters[i][0])); not needed in new version starts from zezro
 
-			for (int k = 1; k < colClusters[i].size(); k++)
+			float   totalMass  = 0.0f;
+			vectorP wPos       = vectorP(0, 0);
+			vectorP wVel       = vectorP(0, 0);
+			vectorP totalForce = vectorP(0, 0);
+			double  totalVol   = 0.0;
+
+			for (int k = 0; k < colClusters[i].size(); k++)
 			{
-				Body& bodb = (*(colClusters[i][k]));
-				float newMass = boda.m_Mass + bodb.m_Mass;
-				vectorP newPos = (boda.m_posVec + bodb.m_posVec) / 2;
-				vectorP newVel = ((boda.m_velVec * boda.m_Mass) + (bodb.m_velVec * bodb.m_Mass)) / newMass;
-				vectorP newFor = (boda.m_forVec + bodb.m_forVec) / 2;
-				double newRadius = pow(boda.m_radius * boda.m_radius * boda.m_radius + bodb.m_radius * bodb.m_radius * bodb.m_radius, 1.0f / 3.0f);
-
-				boda.m_Mass = newMass;
-				boda.m_posVec = newPos;
-				boda.m_velVec = newVel;
-				boda.m_forVec = newFor;
-				boda.m_radius = newRadius;
-				bodb.dead = true;
+				Body& b = *(colClusters[i][k]);
+				totalMass  += b.m_Mass;
+				wPos       += b.m_posVec * b.m_Mass;
+				wVel       += b.m_velVec * b.m_Mass;
+				totalForce += b.m_forVec; //force isnt averages as its a vector and vectors are additive
+				totalVol   += b.m_radius * b.m_radius * b.m_radius;
+				b.dead = true;
 			}
 
-			(*(colClusters[i][0])).dead = true;
-			auto newBody = std::make_unique<Body>(boda);
-			newBody->clusterIndex = 0;
-			newBody->dead = false;
+			Body mergedBody      = *(colClusters[i][0]);
+			mergedBody.m_Mass    = totalMass;
+			mergedBody.m_posVec  = wPos / totalMass;
+			mergedBody.m_velVec  = wVel / totalMass;
+			mergedBody.m_forVec  = totalForce;
+			mergedBody.m_radius  = pow(totalVol, 1.0 / 3.0);
+			mergedBody.clusterIndex = 0;
+			mergedBody.dead      = false;
 
-			addtobodies.push_back(std::move(newBody));  // Use the addtobodies vector you already have!
+			//(*(colClusters[i][0])).dead = true; //done in loop
+			//auto newBody = std::make_unique<Body>(mergedBody); compact this shit
+			//newBody->clusterIndex = 0; //done already
+			//newBody->dead = false; //done already
+
+			addtobodies.push_back(std::move(std::make_unique<Body>(mergedBody)));  // Use the addtobodies vector you already have!
 
 			std::vector<Body> clusterSnapshot;
 			LOG("Collisions\n-----------")
@@ -573,7 +582,7 @@ int main()
 			vectorP vector3(2,-2);
 
 			auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector2);
-			auto perf = std::make_unique<Body>(1000.0f, 0.1f, true, vector, vector3);
+			auto perf = std::make_unique<Body>(1000.0f, 0.2f, true, vector, vector3);
 
 			bodys.push_back(std::move(star));
 			bodys.push_back(std::move(perf));
@@ -595,7 +604,7 @@ int main()
 
 		if (operation == 5)
 		{
-			/*vectorP vector(3, 3);
+			vectorP vector(3, 3);
 			vectorP vector2(6, 6);
 			vectorP vector4(-1, -1);
 
@@ -636,11 +645,11 @@ int main()
 
 			bodys.push_back(std::move(star11));
 			bodys.push_back(std::move(perf11));
-			bodys.push_back(std::move(nig11));*/
+			bodys.push_back(std::move(nig11));
 
-			float mass = 100000000000.0f;
+			/*float mass = 100000000000.0f;
 
-			/*vectorP pos1( 0.97f,  -0.2430f);
+			vectorP pos1( 0.97f,  -0.2430f);
 			vectorP pos2(-0.97f,   0.2430f);
 			vectorP pos3( 0.0f,    0.0f);
 
@@ -656,7 +665,7 @@ int main()
 			bodys.push_back(std::move(perf11));
 			bodys.push_back(std::move(nig11));*/
 
-			vectorP pos1( 2.0f,  2.0f);
+			/*vectorP pos1( 2.0f,  2.0f);
 			vectorP pos2(-2.0f,   -2.0f);
 
 
@@ -667,7 +676,7 @@ int main()
 			auto perf11 = std::make_unique<Body>(mass, 0.1f, true, pos2, vel2);
 
 			bodys.push_back(std::move(star11));
-			bodys.push_back(std::move(perf11));
+			bodys.push_back(std::move(perf11));*/
 
 			LOG("-----")
 			LOG("Alive\n------------")
@@ -711,6 +720,8 @@ int main()
 			float dur;
 			std::cout << "Runtime:";
 			std::cin >> dur;
+
+			float noofnd = (1/dt) * dur;
 
 			int stat;
 			do
@@ -766,6 +777,11 @@ int main()
 
 			int rerun = 1;
 
+
+			if (stat != 2)
+			{
+
+			}
 			do
 			{
 
