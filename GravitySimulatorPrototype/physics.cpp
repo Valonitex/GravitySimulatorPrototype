@@ -6,6 +6,9 @@
 
 double dt = (1.0f / 120.0f);
 
+class Body;
+void eos(double& KE , double& PE , double& E , std::vector<std::unique_ptr<Body>>& bodys);
+
 void drawGrid(const std::vector<std::vector<char>> livyud)
 {
 	for (int i = 0; i < livyud.size(); i++)
@@ -606,7 +609,67 @@ int main()
 
 		if (operation == 5)
 		{
-			vectorP vector(3, 3);
+			// --- 3. THE FIGURE-8 ORBIT (SCALED FOR REAL G) ---
+			float mass_fig8 = 1000000000000.0f; // 1 Trillion kg
+			float rad_fig8 = 0.5f;
+
+			// Exact starting positions
+			vectorP pos1(0.97000436f, -0.24308753f);
+			vectorP pos2(-0.97000436f, 0.24308753f);
+			vectorP pos3(0.0f, 0.0f);
+
+			// Velocities properly scaled by sqrt(G * M) -> multiplier is ~8.1696389
+			vectorP vel1(3.808715f, 3.532270f);
+			vectorP vel2(3.808715f, 3.532270f);
+			vectorP vel3(-7.617430f, -7.064540f);
+
+			auto figA = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos1, vel1);
+			auto figB = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos2, vel2);
+			auto figC = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos3, vel3);
+
+			bodys.push_back(std::move(figA));
+			bodys.push_back(std::move(figB));
+			bodys.push_back(std::move(figC));
+			// --- 2. HIGHLY ECCENTRIC ORBIT (STRESS TEST) ---
+			/*float mass_sun = 100000000000000.0f; // 100 Trillion kg
+			float mass_planet = 1000.0f;         // 1000 kg (negligible)
+
+			// Sun at center, planet starts at "periapsis" (closest approach)
+			vectorP pos_sun(0.0f, 0.0f);
+			vectorP pos_planet(10.0f, 0.0f); // 10 units away
+
+			// Sun is stationary. Planet is moving extremely fast on the Y axis
+			vectorP vel_sun(0.0f, 0.0f);
+			vectorP vel_planet(0.0f, 34.65f); // Eccentricity = 0.8
+
+			// Note: movability for sun is set to 'false' so it stays pinned
+			auto sun = std::make_unique<Body>(mass_sun, 5.0f, false, pos_sun, vel_sun);
+			auto planet = std::make_unique<Body>(mass_planet, 0.5f, true, pos_planet, vel_planet);
+
+			bodys.push_back(std::move(sun));
+			bodys.push_back(std::move(planet));*/
+
+			// --- 1. PERFECT 2-BODY CIRCULAR ORBIT ---
+			// Mass = 1 trillion kg.
+			/*float mass_binary = 1000000000000.0f;
+			float radius_binary = 1.0f;
+
+			// Placed 10 units away from the center on the X-axis
+			vectorP posA(10.0f, 0.0f);
+			vectorP posB(-10.0f, 0.0f);
+
+			// Scaled orbital velocity to perfectly balance G = 6.6743e-11
+			// V = sqrt((G * M) / (4 * r)) = 1.29173
+			vectorP velA(0.0f, 1.29173f);
+			vectorP velB(0.0f, -1.29173f);
+
+			auto starA = std::make_unique<Body>(mass_binary, radius_binary, true, posA, velA);
+			auto starB = std::make_unique<Body>(mass_binary, radius_binary, true, posB, velB);
+
+			bodys.push_back(std::move(starA));
+			bodys.push_back(std::move(starB));*/
+
+			/*vectorP vector(3, 3);
 			vectorP vector2(6, 6);
 			vectorP vector4(-1, -1);
 
@@ -635,9 +698,9 @@ int main()
 			
 			auto star11 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector11, vector40);
 			auto perf11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector211);
-			auto nig11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector411);
+			auto nig11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector411); */
 
-			bodys.push_back(std::move(star));
+			/*bodys.push_back(std::move(star));
 			bodys.push_back(std::move(perf));
 			bodys.push_back(std::move(nig));
 
@@ -647,7 +710,7 @@ int main()
 
 			bodys.push_back(std::move(star11));
 			bodys.push_back(std::move(perf11));
-			bodys.push_back(std::move(nig11));
+			bodys.push_back(std::move(nig11)); */
 
 			/*float mass = 100000000000.0f;
 
@@ -790,14 +853,22 @@ int main()
 
 			int rerun = 1;
 
+			double ogKE;
+			double ogPE;
+			double ogE;
+
+			eos( ogKE, ogPE, ogE , bodys);
 
 			if (stat != 2)
 			{
 				do
 				{
+					double KE;
+					double PE;
+					double E;
+
 					while (!WindowShouldClose())
 					{
-
 
 						bodys.clear();
 						bodys.reserve(bodOs.size());
@@ -858,6 +929,13 @@ int main()
 							}
 
 							physics::move(bodys);
+
+							eos(KE , PE , E , bodys);
+
+							double Edifn = E - ogE;
+
+							LOG( Edifn);
+
 							auto colData = (physics::checkCol(bodys,colClusters));
 							auto killed = std::move(colData.deadBodies);
 							auto newClusters = std::move(colData.clusters);
@@ -896,7 +974,7 @@ int main()
 							{
 								for (int i = 0; i < bodys.size(); i++)
 								{
-									bodys[i]->GetVal();
+							//		bodys[i]->GetVal();
 								}
 							}
 
@@ -910,7 +988,7 @@ int main()
 							auto t1 = clock::now();
 							auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
 							double dt_ms = dt * 1000000.0f;
-							LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
+							//LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
 		//this is for the work ms , comment it out
 		//auto t0 = clock::now(); //iteration
 							nextFrame += dt_duration;
@@ -946,6 +1024,10 @@ int main()
 
 			if (stat == 2)
 			{
+				double KE;
+				double PE;
+				double E;
+
 				do
 				{
 					auto t0 = clock::now();
@@ -981,6 +1063,15 @@ int main()
 
 
 						physics::move(bodys);
+
+
+						eos(KE , PE , E , bodys);
+
+						double Edifn = E - ogE ;
+
+						LOG("Net Dif\n" << Edifn);
+
+
 						auto colData = (physics::checkCol(bodys,colClusters));
 						auto killed = std::move(colData.deadBodies);
 						auto newClusters = std::move(colData.clusters);
@@ -1105,4 +1196,40 @@ int main()
 	} while (operation != 0);
 
 	std::cin.get();
+}
+
+
+void eos(double& KE , double& PE , double& E , std::vector<std::unique_ptr<Body>>& bodys)
+{
+	KE = 0.0f;
+	PE = 0.0f;
+	E = 0.0f;
+	for (int i = 0 ; i < bodys.size(); i++)
+	{
+		KE += 0.5f * bodys[i]->m_Mass * bodys[i]->m_velVec.magSq();
+	}
+
+	double eps = 0.1;
+
+	if (bodys.size() > 1)
+	{
+		for (int i = 0 ; i < bodys.size() - 1; i++)
+		{
+			auto& bodya = *bodys[i];
+			for (int j = i+1 ; j < bodys.size(); j++)
+			{
+				auto& bodyb = *bodys[j];
+
+				double distSq = (physics::displacement( bodya , bodyb)).magSq();
+				double softenedDist = sqrt(distSq + (eps*eps));
+				PE += (-1 * physics::G * bodya.m_Mass * bodyb.m_Mass)/softenedDist;
+			}
+		}
+	}
+
+	E = KE + PE;
+
+	//LOG("KE:" << KE);
+	//LOG("PE:" << PE);
+	//LOG("E:" << E);
 }
