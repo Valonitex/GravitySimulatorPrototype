@@ -610,7 +610,7 @@ int main()
 		if (operation == 5)
 		{
 			// --- 3. THE FIGURE-8 ORBIT (SCALED FOR REAL G) ---
-			float mass_fig8 = 1000000000000.0f; // 1 Trillion kg
+			/*float mass_fig8 = 1000000000000.0f; // 1 Trillion kg
 			float rad_fig8 = 0.5f;
 
 			// Exact starting positions
@@ -629,9 +629,9 @@ int main()
 
 			bodys.push_back(std::move(figA));
 			bodys.push_back(std::move(figB));
-			bodys.push_back(std::move(figC));
+			bodys.push_back(std::move(figC));*/
 			// --- 2. HIGHLY ECCENTRIC ORBIT (STRESS TEST) ---
-			/*float mass_sun = 100000000000000.0f; // 100 Trillion kg
+			float mass_sun = 100000000000000.0f; // 100 Trillion kg
 			float mass_planet = 1000.0f;         // 1000 kg (negligible)
 
 			// Sun at center, planet starts at "periapsis" (closest approach)
@@ -647,7 +647,7 @@ int main()
 			auto planet = std::make_unique<Body>(mass_planet, 0.5f, true, pos_planet, vel_planet);
 
 			bodys.push_back(std::move(sun));
-			bodys.push_back(std::move(planet));*/
+			bodys.push_back(std::move(planet));
 
 			// --- 1. PERFECT 2-BODY CIRCULAR ORBIT ---
 			// Mass = 1 trillion kg.
@@ -797,7 +797,7 @@ int main()
 			{
 				std::cout << "Grid / Raw Data / No data ? (0/1/2) :";
 				std::cin >> stat;
-			} while (stat < 0 || stat > 2);
+			} while (stat < 0 || stat > 5);
 
 			int Draw;
 			do
@@ -859,6 +859,149 @@ int main()
 
 			eos( ogKE, ogPE, ogE , bodys);
 
+			if (stat == 4)
+			{
+				do
+				{
+					double KE , PE , E ;
+
+					bodys.clear();
+					bodys.reserve(bodOs.size());
+					for (const auto& b : bodOs)
+						bodys.push_back(b ? b->clone() : nullptr);
+
+					int frame = 0;
+					int hmframe = 1;
+					bool quit = false;
+
+					std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+					if (Draw == 1)
+					{
+						const float RENDER_SCALE = 0.25f;
+
+						BeginDrawing();
+						ClearBackground(RAYWHITE);
+
+						BeginMode3D(camera);
+
+						for (int i = 0 ;  i < bodys.size(); i++)
+						{
+							std::unique_ptr temu = bodys[i]->clone();
+							float temx = temu->m_posVec.icap;
+							float temy = temu->m_posVec.jcap;
+							float temr = temu->m_radius;
+							DrawSphere(Vector3(temx * RENDER_SCALE,0, temy * RENDER_SCALE) , temr * RENDER_SCALE , RED);
+
+						}
+						DrawGrid(100,  RENDER_SCALE);
+						EndMode3D();
+						EndDrawing();
+					}
+
+					while (!WindowShouldClose() && !quit && !bodys.empty())
+					{
+
+						std::cout << "[t = " << frame * dt << "s | frame" << frame << "] Steps ? ( Enter = 1 , q = quit) : ";
+						std::string line;
+						std::getline(std::cin , line);
+
+						if (line == "q" || line == "Q")
+						{
+							quit = true;
+							break;
+						}
+						else if (line.empty())
+							hmframe = 1;
+						else
+						{
+							try   { hmframe = std::max(1, std::stoi(line)); }
+							catch (...) { hmframe = 1; }
+						}
+
+						for(int s = 0 ; s < hmframe && !bodys.empty() && !WindowShouldClose(); s++)
+						{
+							frame++;
+
+							if (Draw == 1)
+							{
+								const float RENDER_SCALE = 0.25f;
+
+								BeginDrawing();
+								ClearBackground(RAYWHITE);
+
+								BeginMode3D(camera);
+
+								for (int i = 0 ;  i < bodys.size(); i++)
+								{
+									std::unique_ptr temu = bodys[i]->clone();
+									float temx = temu->m_posVec.icap;
+									float temy = temu->m_posVec.jcap;
+									float temr = temu->m_radius;
+									DrawSphere(Vector3(temx * RENDER_SCALE,0, temy * RENDER_SCALE) , temr * RENDER_SCALE , RED);
+
+								}
+								DrawGrid(100,  RENDER_SCALE);
+								EndMode3D();
+								EndDrawing();
+
+								if (IsKeyPressed(KEY_SPACE)) break;
+							}
+							else
+							{
+								PollInputEvents();
+								if (IsKeyPressed(KEY_SPACE)) break;  // ← interrupt without draw
+							}
+
+							physics::move(bodys);
+
+							eos(KE , PE , E , bodys);
+
+							double Edifn = E - ogE;
+
+							LOG("Net Ediffn : " << Edifn);
+
+							auto colData = (physics::checkCol(bodys,colClusters));
+							auto killed = std::move(colData.deadBodies);
+							auto newClusters = std::move(colData.clusters);
+							for (auto& c : newClusters)
+								Clusters.push_back(std::move(c));
+
+							if (!killed.empty())
+							{
+								colPairs.push_back(std::move(killed));
+							}
+
+
+							//valinuxitexherea
+							//these are the work ms times , comment out till log
+							//auto t1 = clock::now();
+							//auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+							//double dt_ms = dt * 1000000.0f;
+							//LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
+							//this is for the work ms , comment it out
+							//auto t0 = clock::now(); //iteration
+						}
+					}
+
+					std::cout << "Rerun ? (0/1)";
+					std::cin >> rerun;
+
+					if (rerun == 0)
+					{
+						break;
+					}
+
+					if (rerun == 1)
+					{
+						Clusters.clear();
+						colPairs.clear();
+					}
+
+				} while (rerun == 1);
+			}
+
+
 			if (stat != 2)
 			{
 				do
@@ -908,6 +1051,8 @@ int main()
 
 							if (Draw == 1)
 							{
+								const float RENDER_SCALE = 0.25f;
+
 								BeginDrawing();
 								ClearBackground(RAYWHITE);
 
@@ -919,13 +1064,12 @@ int main()
 									float temx = temu->m_posVec.icap;
 									float temy = temu->m_posVec.jcap;
 									float temr = temu->m_radius;
-									DrawSphere(Vector3(temx,0, temy) , temr , RED);
+									DrawSphere(Vector3(temx * RENDER_SCALE,0, temy * RENDER_SCALE) , temr * RENDER_SCALE , RED);
 
 								}
-								DrawGrid(50, 1.0f);
+								DrawGrid(100,  RENDER_SCALE);
 								EndMode3D();
 								EndDrawing();
-
 							}
 
 							physics::move(bodys);
@@ -934,7 +1078,7 @@ int main()
 
 							double Edifn = E - ogE;
 
-							LOG( Edifn);
+							LOG("Net Ediffn : " << Edifn);
 
 							auto colData = (physics::checkCol(bodys,colClusters));
 							auto killed = std::move(colData.deadBodies);
@@ -985,9 +1129,9 @@ int main()
 							}
 		//valinuxitexherea
 							//these are the work ms times , comment out till log
-							auto t1 = clock::now();
-							auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
-							double dt_ms = dt * 1000000.0f;
+							//auto t1 = clock::now();
+							//auto work_ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+							//double dt_ms = dt * 1000000.0f;
 							//LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
 		//this is for the work ms , comment it out
 		//auto t0 = clock::now(); //iteration
@@ -1069,7 +1213,7 @@ int main()
 
 						double Edifn = E - ogE ;
 
-						LOG("Net Dif\n" << Edifn);
+						LOG("Net Dif : " << Edifn);
 
 
 						auto colData = (physics::checkCol(bodys,colClusters));
@@ -1090,6 +1234,8 @@ int main()
 
 					if (Draw == 1)
 					{
+						const float RENDER_SCALE = 0.05f;
+
 						BeginDrawing();
 						ClearBackground(RAYWHITE);
 
@@ -1101,10 +1247,10 @@ int main()
 							float temx = temu->m_posVec.icap;
 							float temy = temu->m_posVec.jcap;
 							float temr = temu->m_radius;
-							DrawSphere(Vector3(temx,0, temy) , temr , RED);
+							DrawSphere(Vector3(temx * RENDER_SCALE,0, temy * RENDER_SCALE) , temr * RENDER_SCALE , RED);
 
 						}
-						DrawGrid(50, 1.0f);
+						DrawGrid(100,  RENDER_SCALE);
 						EndMode3D();
 						EndDrawing();
 					}
@@ -1229,7 +1375,7 @@ void eos(double& KE , double& PE , double& E , std::vector<std::unique_ptr<Body>
 
 	E = KE + PE;
 
-	//LOG("KE:" << KE);
-	//LOG("PE:" << PE);
+	LOG("KE:" << KE);
+	LOG("PE:" << PE);
 	//LOG("E:" << E);
 }
