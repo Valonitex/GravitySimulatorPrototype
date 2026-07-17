@@ -7,7 +7,10 @@
 double dt = (1.0f / 120.0f);
 
 class Body;
+class vectorP;
 void eos(double& KE , double& PE , double& E , std::vector<std::unique_ptr<Body>>& bodys);
+void linearP(vectorP& lP , std::vector<std::unique_ptr<Body>>& bodys);
+void angularP(double& aP , std::vector<std::unique_ptr<Body>>& bodys);
 
 void drawGrid(const std::vector<std::vector<char>> livyud)
 {
@@ -111,6 +114,12 @@ public:
 
 		return *this;
 	}
+
+	double cross(const vectorP& other)
+	{
+		return (icap * other.jcap - jcap * other.icap);
+	}
+
 	bool operator!=(const vectorP& other)
 	{
 		if (icap != other.icap || jcap != other.jcap)
@@ -197,6 +206,16 @@ public:
 	std::unique_ptr<Body> clone() const
 	{
 		return std::make_unique<Body>(m_Mass, m_radius, movability, m_posVec, m_velVec, m_forVec);
+	}
+
+	vectorP lP()
+	{
+		return (m_velVec * m_Mass);
+	}
+
+	double aP()
+	{
+		return (m_posVec.cross(lP()));
 	}
 
 };
@@ -655,7 +674,7 @@ int main()
 				vectorP vel_planet(0.0f, 34.65f); // Eccentricity = 0.8
 
 				// Note: movability for sun is set to 'false' so it stays pinned
-				auto sun = std::make_unique<Body>(mass_sun, 5.0f, false, pos_sun, vel_sun);
+				auto sun = std::make_unique<Body>(mass_sun, 5.0f, true, pos_sun, vel_sun);
 				auto planet = std::make_unique<Body>(mass_planet, 0.5f, true, pos_planet, vel_planet);
 
 				bodys.push_back(std::move(sun));
@@ -685,7 +704,7 @@ int main()
 				bodys.push_back(std::move(starB));
 
 			}
-			 if (moga = 5)
+			 if (moga == 5)
 			 {
 			 	vectorP vector(3, 4);
 			 	vectorP vector2(6, 8);
@@ -867,20 +886,24 @@ int main()
 
 			int rerun = 1;
 
-			double ogKE;
-			double ogPE;
-			double ogE;
+			double ogKE ,ogPE ,ogE , ogangP ;
+			vectorP oglinP;
 
-			const float RENDER_SCALE = 1.00f;
+			const float RENDER_SCALE = 0.25f;
 
 			eos( ogKE, ogPE, ogE , bodys);
+			linearP(oglinP , bodys);
+			angularP(ogangP , bodys);
+
+
 
 			if (stat == 4)
 			{
 				do
 				{
 
-					double KE , PE , E , Edifn;
+					double KE , PE , E , Edifn, angP , angPdiffn;
+					vectorP linP, linPdiffn;
 
 					bodys.clear();
 					bodys.reserve(bodOs.size());
@@ -910,10 +933,30 @@ int main()
 
 						}
 						DrawGrid(100,  RENDER_SCALE);
-						EndMode3D();
+						EndMode3D();								DrawText(TextFormat("KE : %f" , KE), 0, 0, 20 , BLACK);
+						DrawText(TextFormat("PE : %f" , PE), 0, 20, 20 , BLACK);
+						DrawText(TextFormat("E : %f" , E), 0, 40, 20 , BLACK);
 						DrawText(TextFormat("ogKE : %f" , ogKE), 0, 60, 20 , BLACK);
 						DrawText(TextFormat("ogPE : %f" , ogPE), 0, 80, 20 , BLACK);
 						DrawText(TextFormat("ogE : %f" , ogE), 0, 100, 20 , BLACK);
+						DrawText(TextFormat("Edif : %f" , Edifn), 0, 120, 20 , BLACK);
+						DrawText(TextFormat("ogangP : %f" , ogangP), 0, 140, 20 , BLACK);
+						DrawText(TextFormat("angP : %f" , angP), 0, 160, 20 , BLACK);
+						DrawText(TextFormat("oglinP :  %f i , %f j" , oglinP.icap , oglinP.jcap), 0, 180, 20 , BLACK);
+						DrawText(TextFormat("linP :  %f i , %f j" , linP.icap , linP.jcap), 0, 200, 20 , BLACK);
+						DrawText(TextFormat("oglinP : %f" , oglinP.mag()), 0, 220, 20 , BLACK);
+						DrawText(TextFormat("linPP : %f" , linP.mag()), 0, 240, 20 , BLACK);
+						DrawText(TextFormat("angPdiffn : %f" , angPdiffn), 0, 300, 20 , BLACK);
+						DrawText(TextFormat("linPdiffn :  %f i , %f j" , linPdiffn.icap , linPdiffn.jcap), 0, 320, 20 , BLACK);
+						DrawText(TextFormat("linPdiffn : %f" , linPdiffn.mag()), 0, 340, 20 , BLACK);
+						DrawText(TextFormat("velocity :  %f i , %f j" , bodys[1]->m_velVec.icap ,  bodys[1]->m_velVec.jcap), 0, 400, 20 , BLACK);;
+						DrawText(TextFormat("position :  %f i , %f j" , bodys[1]->m_posVec.icap ,  bodys[1]->m_posVec.jcap), 0, 420, 20 , BLACK);;
+						DrawText(TextFormat("velocity :  %f i , %f j" , bodys[1]->m_forVec.icap ,  bodys[1]->m_forVec.jcap), 0, 440, 20 , BLACK);
+
+
+						DrawText(TextFormat("velocity : %f" , bodys[1]->m_velVec.mag()), 0, 500, 20 , BLACK);
+						DrawText(TextFormat("position : %f" , bodys[1]->m_posVec.mag()), 0, 520, 20 , BLACK);
+
 						EndDrawing();
 					}
 
@@ -950,10 +993,17 @@ int main()
 							physics::move(bodys);
 
 							eos(KE , PE , E , bodys);
-
 							Edifn = E - ogE;
 
+							linearP(linP , bodys);
+							angularP(angP , bodys);
+
+							linPdiffn = linP - oglinP;
+							angPdiffn = angP - ogangP;
+
 							LOG("Net Ediffn : " << Edifn);
+							LOG("Net linPdiffn : " << linPdiffn.mag());
+							LOG("Net angPdiffn : " << angPdiffn);
 
 							auto colData = (physics::checkCol(bodys,colClusters));
 							auto killed = std::move(colData.deadBodies);
@@ -991,6 +1041,24 @@ int main()
 								DrawText(TextFormat("ogPE : %f" , ogPE), 0, 80, 20 , BLACK);
 								DrawText(TextFormat("ogE : %f" , ogE), 0, 100, 20 , BLACK);
 								DrawText(TextFormat("Edif : %f" , Edifn), 0, 120, 20 , BLACK);
+								DrawText(TextFormat("ogangP : %f" , ogangP), 0, 140, 20 , BLACK);
+								DrawText(TextFormat("angP : %f" , angP), 0, 160, 20 , BLACK);
+								DrawText(TextFormat("oglinP :  %f i , %f j" , oglinP.icap , oglinP.jcap), 0, 180, 20 , BLACK);
+								DrawText(TextFormat("linP :  %f i , %f j" , linP.icap , linP.jcap), 0, 200, 20 , BLACK);
+								DrawText(TextFormat("oglinP : %f" , oglinP.mag()), 0, 220, 20 , BLACK);
+								DrawText(TextFormat("linPP : %f" , linP.mag()), 0, 240, 20 , BLACK);
+								DrawText(TextFormat("angPdiffn : %f" , angPdiffn), 0, 300, 20 , BLACK);
+								DrawText(TextFormat("linPdiffn :  %f i , %f j" , linPdiffn.icap , linPdiffn.jcap), 0, 320, 20 , BLACK);
+								DrawText(TextFormat("linPdiffn : %f" , linPdiffn.mag()), 0, 340, 20 , BLACK);
+
+								DrawText(TextFormat("velocity :  %f i , %f j" , bodys[1]->m_velVec.icap ,  bodys[1]->m_velVec.jcap), 0, 400, 20 , BLACK);;
+								DrawText(TextFormat("position :  %f i , %f j" , bodys[1]->m_posVec.icap ,  bodys[1]->m_posVec.jcap), 0, 420, 20 , BLACK);;
+								DrawText(TextFormat("velocity :  %f i , %f j" , bodys[1]->m_forVec.icap ,  bodys[1]->m_forVec.jcap), 0, 440, 20 , BLACK);
+
+
+								DrawText(TextFormat("velocity : %f" , bodys[1]->m_velVec.mag()), 0, 500, 20 , BLACK);
+								DrawText(TextFormat("position : %f" , bodys[1]->m_posVec.mag()), 0, 520, 20 , BLACK);
+
 								EndDrawing();
 
 								if (IsKeyPressed(KEY_SPACE)) break;
@@ -1417,4 +1485,23 @@ void eos(double& KE , double& PE , double& E , std::vector<std::unique_ptr<Body>
 	LOG("KE:" << KE);
 	LOG("PE:" << PE);
 	//LOG("E:" << E);
+}
+
+
+void linearP(vectorP& lP , std::vector<std::unique_ptr<Body>>& bodys)
+{
+	lP = vectorP(0.0f,0.0f);
+	for (int i = 0 ; i < bodys.size(); i++)
+	{
+		lP += bodys[i]->lP();
+	}
+}
+
+void angularP(double& aP , std::vector<std::unique_ptr<Body>>& bodys)
+{
+	aP = 0;
+	for (int i = 0 ; i < bodys.size(); i++)
+	{
+		aP += bodys[i]->aP();
+	}
 }
