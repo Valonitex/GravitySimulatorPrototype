@@ -609,66 +609,94 @@ int main()
 
 		if (operation == 5)
 		{
-			// --- 3. THE FIGURE-8 ORBIT (SCALED FOR REAL G) ---
-			/*float mass_fig8 = 1000000000000.0f; // 1 Trillion kg
-			float rad_fig8 = 0.5f;
 
-			// Exact starting positions
-			vectorP pos1(0.97000436f, -0.24308753f);
-			vectorP pos2(-0.97000436f, 0.24308753f);
-			vectorP pos3(0.0f, 0.0f);
+			int moga;
+			std::cout << "Choose:";
+			std::cin >> moga;
 
-			// Velocities properly scaled by sqrt(G * M) -> multiplier is ~8.1696389
-			vectorP vel1(3.808715f, 3.532270f);
-			vectorP vel2(3.808715f, 3.532270f);
-			vectorP vel3(-7.617430f, -7.064540f);
+			if (moga == 1)
+			{
+				// --- 3. THE FIGURE-8 ORBIT (SCALED FOR REAL G) ---
+				float mass_fig8 = 1000000000000.0f; // 1 Trillion kg
+				float rad_fig8 = 0.5f;
 
-			auto figA = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos1, vel1);
-			auto figB = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos2, vel2);
-			auto figC = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos3, vel3);
+				// Exact starting positions
+				vectorP pos1(0.97000436f, -0.24308753f);
+				vectorP pos2(-0.97000436f, 0.24308753f);
+				vectorP pos3(0.0f, 0.0f);
 
-			bodys.push_back(std::move(figA));
-			bodys.push_back(std::move(figB));
-			bodys.push_back(std::move(figC));*/
-			// --- 2. HIGHLY ECCENTRIC ORBIT (STRESS TEST) ---
-			float mass_sun = 100000000000000.0f; // 100 Trillion kg
-			float mass_planet = 1000.0f;         // 1000 kg (negligible)
+				// Velocities properly scaled by sqrt(G * M) -> multiplier is ~8.1696389
+				vectorP vel1(3.808715f, 3.532270f);
+				vectorP vel2(3.808715f, 3.532270f);
+				vectorP vel3(-7.617430f, -7.064540f);
 
-			// Sun at center, planet starts at "periapsis" (closest approach)
-			vectorP pos_sun(0.0f, 0.0f);
-			vectorP pos_planet(10.0f, 0.0f); // 10 units away
+				auto figA = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos1, vel1);
+				auto figB = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos2, vel2);
+				auto figC = std::make_unique<Body>(mass_fig8, rad_fig8, true, pos3, vel3);
 
-			// Sun is stationary. Planet is moving extremely fast on the Y axis
-			vectorP vel_sun(0.0f, 0.0f);
-			vectorP vel_planet(0.0f, 34.65f); // Eccentricity = 0.8
+				bodys.push_back(std::move(figA));
+				bodys.push_back(std::move(figB));
+				bodys.push_back(std::move(figC));
+			}
 
-			// Note: movability for sun is set to 'false' so it stays pinned
-			auto sun = std::make_unique<Body>(mass_sun, 5.0f, false, pos_sun, vel_sun);
-			auto planet = std::make_unique<Body>(mass_planet, 0.5f, true, pos_planet, vel_planet);
+			if (moga == 2)
+			{
 
-			bodys.push_back(std::move(sun));
-			bodys.push_back(std::move(planet));
+				// --- 2. HIGHLY ECCENTRIC ORBIT (STRESS TEST) ---
+				float mass_sun = 100000000000000.0f; // 100 Trillion kg
+				float mass_planet = 1000.0f;         // 1000 kg (negligible)
 
-			// --- 1. PERFECT 2-BODY CIRCULAR ORBIT ---
-			// Mass = 1 trillion kg.
-			/*float mass_binary = 1000000000000.0f;
-			float radius_binary = 1.0f;
+				// Sun at center, planet starts at "periapsis" (closest approach)
+				vectorP pos_sun(0.0f, 0.0f);
+				vectorP pos_planet(10.0f, 0.0f); // 10 units away
 
-			// Placed 10 units away from the center on the X-axis
-			vectorP posA(10.0f, 0.0f);
-			vectorP posB(-10.0f, 0.0f);
+				// Sun is stationary. Planet is moving extremely fast on the Y axis
+				vectorP vel_sun(0.0f, 0.0f);
+				vectorP vel_planet(0.0f, 34.65f); // Eccentricity = 0.8
 
-			// Scaled orbital velocity to perfectly balance G = 6.6743e-11
-			// V = sqrt((G * M) / (4 * r)) = 1.29173
-			vectorP velA(0.0f, 1.29173f);
-			vectorP velB(0.0f, -1.29173f);
+				// Note: movability for sun is set to 'false' so it stays pinned
+				auto sun = std::make_unique<Body>(mass_sun, 5.0f, false, pos_sun, vel_sun);
+				auto planet = std::make_unique<Body>(mass_planet, 0.5f, true, pos_planet, vel_planet);
 
-			auto starA = std::make_unique<Body>(mass_binary, radius_binary, true, posA, velA);
-			auto starB = std::make_unique<Body>(mass_binary, radius_binary, true, posB, velB);
+				bodys.push_back(std::move(sun));
+				bodys.push_back(std::move(planet));
+			}
 
-			bodys.push_back(std::move(starA));
-			bodys.push_back(std::move(starB));*/
+			if (moga == 4)
+			{
+				// --- 1. PERFECT 2-BODY CIRCULAR ORBIT ---
+				// Mass = 1 trillion kg.
+				float mass_binary = 1000000000000.0f;
+				float radius_binary = 1.0f;
 
+				// Placed 10 units away from the center on the X-axis
+				vectorP posA(10.0f, 0.0f);
+				vectorP posB(-10.0f, 0.0f);
+
+				// Scaled orbital velocity to perfectly balance G = 6.6743e-11
+				// V = sqrt((G * M) / (4 * r)) = 1.29173
+				vectorP velA(0.0f, 1.29173f);
+				vectorP velB(0.0f, -1.29173f);
+
+				auto starA = std::make_unique<Body>(mass_binary, radius_binary, true, posA, velA);
+				auto starB = std::make_unique<Body>(mass_binary, radius_binary, true, posB, velB);
+
+				bodys.push_back(std::move(starA));
+				bodys.push_back(std::move(starB));
+
+			}
+			 if (moga = 5)
+			 {
+			 	vectorP vector(3, 4);
+			 	vectorP vector2(6, 8);
+			 	vectorP vector4(2, -2);
+
+			 	auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector2);
+			 	auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector ,vector4);
+
+			 	bodys.push_back(std::move(star));
+			 	bodys.push_back(std::move(perf));
+			 }
 			/*vectorP vector(3, 3);
 			vectorP vector2(6, 6);
 			vectorP vector4(-1, -1);
@@ -684,8 +712,6 @@ int main()
 			vectorP vector0(3, 3);
 			vectorP vector20(6, 6);
 			vectorP vector40(-1, -1);
-
-
 
 			auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector);
 			auto perf = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector2,vector20);
@@ -730,18 +756,6 @@ int main()
 			bodys.push_back(std::move(perf11));
 			bodys.push_back(std::move(nig11));*/
 
-			/*vectorP pos1( 2.0f,  2.0f);
-			vectorP pos2(-2.0f,   -2.0f);
-
-
-			vectorP vel1( 0,   -0.4323f);
-			vectorP vel2( 0,    0.4323f);
-
-			auto star11 = std::make_unique<Body>(mass, 0.1f,  true, pos1, vel1);
-			auto perf11 = std::make_unique<Body>(mass, 0.1f, true, pos2, vel2);
-
-			bodys.push_back(std::move(star11));
-			bodys.push_back(std::move(perf11));*/
 
 			LOG("-----")
 			LOG("Alive\n------------")
@@ -857,13 +871,16 @@ int main()
 			double ogPE;
 			double ogE;
 
+			const float RENDER_SCALE = 1.00f;
+
 			eos( ogKE, ogPE, ogE , bodys);
 
 			if (stat == 4)
 			{
 				do
 				{
-					double KE , PE , E ;
+
+					double KE , PE , E , Edifn;
 
 					bodys.clear();
 					bodys.reserve(bodOs.size());
@@ -878,8 +895,6 @@ int main()
 
 					if (Draw == 1)
 					{
-						const float RENDER_SCALE = 0.25f;
-
 						BeginDrawing();
 						ClearBackground(RAYWHITE);
 
@@ -896,6 +911,9 @@ int main()
 						}
 						DrawGrid(100,  RENDER_SCALE);
 						EndMode3D();
+						DrawText(TextFormat("ogKE : %f" , ogKE), 0, 60, 20 , BLACK);
+						DrawText(TextFormat("ogPE : %f" , ogPE), 0, 80, 20 , BLACK);
+						DrawText(TextFormat("ogE : %f" , ogE), 0, 100, 20 , BLACK);
 						EndDrawing();
 					}
 
@@ -919,45 +937,21 @@ int main()
 							catch (...) { hmframe = 1; }
 						}
 
+
+						//auto t0 = clock::now();
+
+
 						for(int s = 0 ; s < hmframe && !bodys.empty() && !WindowShouldClose(); s++)
 						{
 							frame++;
 
-							if (Draw == 1)
-							{
-								const float RENDER_SCALE = 0.25f;
 
-								BeginDrawing();
-								ClearBackground(RAYWHITE);
-
-								BeginMode3D(camera);
-
-								for (int i = 0 ;  i < bodys.size(); i++)
-								{
-									std::unique_ptr temu = bodys[i]->clone();
-									float temx = temu->m_posVec.icap;
-									float temy = temu->m_posVec.jcap;
-									float temr = temu->m_radius;
-									DrawSphere(Vector3(temx * RENDER_SCALE,0, temy * RENDER_SCALE) , temr * RENDER_SCALE , RED);
-
-								}
-								DrawGrid(100,  RENDER_SCALE);
-								EndMode3D();
-								EndDrawing();
-
-								if (IsKeyPressed(KEY_SPACE)) break;
-							}
-							else
-							{
-								PollInputEvents();
-								if (IsKeyPressed(KEY_SPACE)) break;  // ← interrupt without draw
-							}
 
 							physics::move(bodys);
 
 							eos(KE , PE , E , bodys);
 
-							double Edifn = E - ogE;
+							Edifn = E - ogE;
 
 							LOG("Net Ediffn : " << Edifn);
 
@@ -972,7 +966,40 @@ int main()
 								colPairs.push_back(std::move(killed));
 							}
 
+							if (Draw == 1)
+							{
+								BeginDrawing();
+								ClearBackground(RAYWHITE);
 
+								BeginMode3D(camera);
+
+								for (int i = 0 ;  i < bodys.size(); i++)
+								{
+									std::unique_ptr temu = bodys[i]->clone();
+									float temx = temu->m_posVec.icap;
+									float temy = temu->m_posVec.jcap;
+									float temr = temu->m_radius;
+									DrawSphere(Vector3(temx * RENDER_SCALE,0, temy * RENDER_SCALE) , temr * RENDER_SCALE , RED);
+
+								}
+								DrawGrid(1000,  RENDER_SCALE);
+								EndMode3D();
+								DrawText(TextFormat("KE : %f" , KE), 0, 0, 20 , BLACK);
+								DrawText(TextFormat("PE : %f" , PE), 0, 20, 20 , BLACK);
+								DrawText(TextFormat("E : %f" , E), 0, 40, 20 , BLACK);
+								DrawText(TextFormat("ogKE : %f" , ogKE), 0, 60, 20 , BLACK);
+								DrawText(TextFormat("ogPE : %f" , ogPE), 0, 80, 20 , BLACK);
+								DrawText(TextFormat("ogE : %f" , ogE), 0, 100, 20 , BLACK);
+								DrawText(TextFormat("Edif : %f" , Edifn), 0, 120, 20 , BLACK);
+								EndDrawing();
+
+								if (IsKeyPressed(KEY_SPACE)) break;
+							}
+							else
+							{
+								PollInputEvents();
+								if (IsKeyPressed(KEY_SPACE)) break;  // ← interrupt without draw
+							}
 							//valinuxitexherea
 							//these are the work ms times , comment out till log
 							//auto t1 = clock::now();
@@ -981,14 +1008,26 @@ int main()
 							//LOG("work_ms = " << work_ms << " dt_ms = " << dt_ms << "\n");
 							//this is for the work ms , comment it out
 							//auto t0 = clock::now(); //iteration
+
+							/*if (frame == 1000)
+							{
+								auto t1 = clock::now();
+								auto work_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() ;
+								LOG("work_ms = " << work_us << " dt_us = " << dur * 1000000 << "\n");
+							}*/
 						}
 					}
+
 
 					std::cout << "Rerun ? (0/1)";
 					std::cin >> rerun;
 
 					if (rerun == 0)
 					{
+						for (int i = 0 ; i < bodOs.size(); i++)
+						{
+							bodys[i]->GetVal();
+						}
 						break;
 					}
 
@@ -1002,7 +1041,7 @@ int main()
 			}
 
 
-			if (stat != 2)
+			if (stat == 1 || stat == 0)
 			{
 				do
 				{
@@ -1182,7 +1221,7 @@ int main()
 						bodys.push_back(b ? b->clone() : nullptr);
 
 					int frame = 0;
-
+					noofnd = 1000;
 					while (frame < noofnd && bodys.size() > 0)
 					{
 						frame++;
