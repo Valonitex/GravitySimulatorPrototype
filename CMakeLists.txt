@@ -1,9 +1,17 @@
-cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 3.24)
 project(PhysicsApp)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(RAYLIB_DIR ${CMAKE_SOURCE_DIR}/dep/raylib-6.0_linux_amd64)
+
+# Fetch raylib at build time
+include(FetchContent)
+set(FETCHCONTENT_QUIET OFF)
+FetchContent_Declare(raylib
+    URL https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_linux_amd64.tar.gz
+    DOWNLOAD_EXTRACT_DIR ${CMAKE_BINARY_DIR}/_deps
+)
+FetchContent_MakeAvailable(raylib)
 
 find_package(OpenGL REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
@@ -22,14 +30,15 @@ add_executable(OpenGLingsim
 )
 add_executable(RaylibDemo RaylibDemo/main.cpp)
 
-target_include_directories(RaylibDemo PRIVATE ${RAYLIB_DIR}/include)
-target_link_directories(RaylibDemo PRIVATE ${RAYLIB_DIR}/lib)
+target_include_directories(RaylibDemo PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/include)
+target_link_directories(RaylibDemo PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/lib)
 target_link_libraries(RaylibDemo raylib m pthread dl rt X11)
 
 target_include_directories(GsimTerm PRIVATE ../GravitySimulatorPrototype)
-target_include_directories(GsimTerm PRIVATE ${RAYLIB_DIR}/include)
-target_link_directories(GsimTerm PRIVATE ${RAYLIB_DIR}/lib)
+target_include_directories(GsimTerm PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/include)
+target_link_directories(GsimTerm PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/lib)
 target_link_libraries(GsimTerm raylib m pthread dl rt X11)
 
 target_include_directories(OpenGLingsim PRIVATE OpenGL)
 target_link_libraries(OpenGLingsim OpenGL::GL glfw GLEW::GLEW)
+
