@@ -29,13 +29,14 @@ add_executable(OpenGLingsim
 )
 add_executable(RaylibDemo RaylibDemo/main.cpp)
 
-target_include_directories(RaylibDemo PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/include)
-target_link_directories(RaylibDemo PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/lib)
+# Use FetchContent variable for proper path resolution
+target_include_directories(RaylibDemo PRIVATE ${raylib_SOURCE_DIR}/include)
+target_link_directories(RaylibDemo PRIVATE ${raylib_SOURCE_DIR}/lib)
 target_link_libraries(RaylibDemo raylib m pthread dl rt X11)
 
 target_include_directories(GsimTerm PRIVATE ../GravitySimulatorPrototype)
-target_include_directories(GsimTerm PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/include)
-target_link_directories(GsimTerm PRIVATE ${CMAKE_BINARY_DIR}/_deps/raylib-5.0_linux_amd64/lib)
+target_include_directories(GsimTerm PRIVATE ${raylib_SOURCE_DIR}/include)
+target_link_directories(GsimTerm PRIVATE ${raylib_SOURCE_DIR}/lib)
 target_link_libraries(GsimTerm raylib m pthread dl rt X11)
 
 target_include_directories(OpenGLingsim PRIVATE OpenGL)
