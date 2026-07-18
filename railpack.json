@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "buildAptPackages": [
+    "libgl1-mesa-dev",
+    "libglu1-mesa-dev",
+    "libglfw3-dev",
+    "libglew-dev",
+    "libx11-dev"
+  ],
+  "deploy": {
+    "aptPackages": [
+      "libgl1",
+      "libglu1-mesa",
+      "libglfw3",
+      "libglew2.2",
+      "libx11-6"
+    ]
+  }
+}
