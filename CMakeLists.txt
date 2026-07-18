@@ -9,7 +9,6 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 FetchContent_Declare(raylib
     URL https://github.com/raysan5/raylib/releases/download/5.0/raylib-5.0_linux_amd64.tar.gz
-    DOWNLOAD_EXTRACT_DIR ${CMAKE_BINARY_DIR}/_deps
 )
 FetchContent_MakeAvailable(raylib)
 
@@ -41,4 +40,5 @@ target_link_libraries(GsimTerm raylib m pthread dl rt X11)
 
 target_include_directories(OpenGLingsim PRIVATE OpenGL)
 target_link_libraries(OpenGLingsim OpenGL::GL glfw GLEW::GLEW)
+
 
