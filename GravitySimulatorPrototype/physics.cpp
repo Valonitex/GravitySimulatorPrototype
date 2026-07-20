@@ -554,66 +554,63 @@ namespace physics {
 	}
 
 	// 4th-Order Hermite Predictor-Corrector Integrator (PECE)
-	void moveHermite(std::vector<std::unique_ptr<Body>>& bodies)
+	void moveHermite(std::vector<std::unique_ptr<Body>>& bodies, double& dt)
 	{
 		int s = bodies.size();
-
-		// -------------------------------------------------------------
-		// 0. EVALUATE INITIAL STATE: Guarantee exact a_old and j_old at current positions
-		// -------------------------------------------------------------
 		resolveWithJerk(bodies);
 
-		// Buffers to store initial state & predictions
 		std::vector<vectorP> x_old(s), v_old(s), a_old(s), j_old(s);
 		std::vector<vectorP> x_pred(s), v_pred(s);
 
-		double dt2 = dt * dt;
-		double dt3 = dt2 * dt;
-		double dt4 = dt3 * dt;
-		double dt5 = dt4 * dt;
+		double dt2 = dt*dt, dt3 = dt2*dt, dt4 = dt3*dt, dt5 = dt4*dt;
 
-		// -------------------------------------------------------------
-		// 1. PREDICT: Extrapolate state using exact current a and j
-		// -------------------------------------------------------------
+		// PREDICT
 		for (int i = 0; i < s; i++) {
 			if (!bodies[i]->movability) continue;
-
 			x_old[i] = bodies[i]->m_posVec;
 			v_old[i] = bodies[i]->m_velVec;
 			a_old[i] = bodies[i]->m_accVec;
 			j_old[i] = bodies[i]->m_jerkVec;
 
-			// Taylor expansion prediction
-			x_pred[i] = x_old[i] + v_old[i] * dt + a_old[i] * (0.5 * dt2) + j_old[i] * (1.0 / 6.0 * dt3);
-			v_pred[i] = v_old[i] + a_old[i] * dt + j_old[i] * (0.5 * dt2);
+			x_pred[i] = x_old[i] + v_old[i]*dt + a_old[i]*(0.5*dt2) + j_old[i]*(dt3/6.0);
+			v_pred[i] = v_old[i] + a_old[i]*dt  + j_old[i]*(0.5*dt2);
 
-			// Temporarily set body state to predicted state
 			bodies[i]->m_posVec = x_pred[i];
 			bodies[i]->m_velVec = v_pred[i];
 		}
 
-		// -------------------------------------------------------------
-		// 2. EVALUATE PREDICTION: Compute new accelerations & jerks at predicted state
-		// -------------------------------------------------------------
 		resolveWithJerk(bodies);
 
-		// -------------------------------------------------------------
-		// 3. CORRECT: Calculate higher derivatives and refine state
-		// -------------------------------------------------------------
+		// CORRECT + compute Aarseth dt
+		const double eta = 0.02;
+		double dt_candidate = 2.0 * dt;  // max allowed growth
+
 		for (int i = 0; i < s; i++) {
 			if (!bodies[i]->movability) continue;
 
 			vectorP a_new = bodies[i]->m_accVec;
 			vectorP j_new = bodies[i]->m_jerkVec;
 
-			// Calculate Snap (2nd derivative of acceleration) and Crackle (3rd derivative)
-			vectorP snap = ( (a_old[i] - a_new) * -6.0 - (j_old[i] * 4.0 + j_new * 2.0) * dt ) * (1.0 / dt2);
-			vectorP crackle = ( (a_old[i] - a_new) * 12.0 + (j_old[i] + j_new) * (6.0 * dt) ) * (1.0 / dt3);
+			vectorP snap    = ((a_old[i] - a_new)*-6.0 - (j_old[i]*4.0 + j_new*2.0)*dt) * (1.0/dt2);
+			vectorP crackle = ((a_old[i] - a_new)*12.0 + (j_old[i] + j_new)*(6.0*dt))   * (1.0/dt3);
 
-			// Apply final 4th-order corrected positions and velocities
-			bodies[i]->m_posVec = x_pred[i] + snap * (1.0 / 24.0 * dt4) + crackle * (1.0 / 120.0 * dt5);
-			bodies[i]->m_velVec = v_pred[i] + snap * (1.0 / 6.0 * dt3)  + crackle * (1.0 / 24.0 * dt4);
+			bodies[i]->m_posVec = x_pred[i] + snap*(dt4/24.0) + crackle*(dt5/120.0);
+			bodies[i]->m_velVec = v_pred[i] + snap*(dt3/6.0)  + crackle*(dt4/24.0);
+
+			// Aarseth criterion
+			double a0 = a_old[i].mag();
+			double a1 = j_old[i].mag();
+			double a2 = snap.mag();
+			double a3 = crackle.mag();
+
+			double denom = a1*a3 + a2*a2;
+			if (denom > 1e-30) {
+				double dt_i = eta * std::sqrt((a0*a2 + a1*a1) / denom);
+				dt_candidate = std::min(dt_candidate, dt_i);
+			}
 		}
+
+		dt = std::max(dt_candidate, 1e-7);  // floor prevents dt → 0 on singular configs
 	}
 }
 
@@ -1101,7 +1098,7 @@ int main()
 						DrawText(TextFormat("position :  %f i , %f j" , bodys[1]->m_posVec.icap ,  bodys[1]->m_posVec.jcap), 0, 420, 20 , BLACK);;
 						DrawText(TextFormat("velocity :  %f i , %f j" , bodys[1]->m_forVec.icap ,  bodys[1]->m_forVec.jcap), 0, 440, 20 , BLACK);
 
-
+						DrawText(TextFormat("dt : %f" , dt ) , 1000 , 20, 20 , RED);
 						DrawText(TextFormat("velocity : %f" , bodys[1]->m_velVec.mag()), 0, 500, 20 , BLACK);
 						DrawText(TextFormat("position : %f" , bodys[1]->m_posVec.mag()), 0, 520, 20 , BLACK);
 
@@ -1136,7 +1133,7 @@ int main()
 						{
 							frame++;
 
-							physics::moveYoshida(bodys);
+							physics::moveHermite(bodys, dt);
 
 							eos(KE , PE , E , bodys);
 							Edifn = E - ogE;
@@ -1147,6 +1144,7 @@ int main()
 							linPdiffn = linP - oglinP;
 							angPdiffn = angP - ogangP;
 
+							//LOG("dt : " << dt);
 							LOG("Net Ediffn : " << Edifn);
 							LOG("Net linPdiffn : " << linPdiffn.mag());
 							LOG("Net angPdiffn : " << angPdiffn);
@@ -1206,6 +1204,8 @@ int main()
 
 								DrawText(TextFormat("velocity : %f" , bodys[1]->m_velVec.mag()), 0, 500, 20 , BLACK);
 								DrawText(TextFormat("position : %f" , bodys[1]->m_posVec.mag()), 0, 520, 20 , BLACK);
+
+								DrawText(TextFormat("dt : %f" , dt) , 1000 , 20, 20 , RED);
 
 								EndDrawing();
 
