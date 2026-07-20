@@ -170,6 +170,7 @@ public:
 	vectorP m_accVec;
 	vectorP m_forVec;
 	vectorP m_forRes;
+	vectorP m_jerkVec;
 	double m_radius;
 	double m_Mass;
 	int clusterIndex = 0;
@@ -440,7 +441,7 @@ namespace physics {
 		bodies[s - 1]->updateVal();
 	}
 
-	void move(std::vector<std::unique_ptr<Body>>& bodies)
+	void moveVerlet(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		resolve(bodies);
 		int s = bodies.size();
@@ -466,6 +467,153 @@ namespace physics {
 			}
 		}
 		
+	}
+
+	void moveYoshida(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		int s = bodies.size();
+
+		// 4th-order Yoshida constants
+		const double c[4] = {  0.6756035959798289, -0.1756035959798289, -0.1756035959798289,  0.6756035959798289 };
+		const double d[3] = {  1.3512071919596578, -1.7024143839193156,  1.3512071919596578 };
+
+		for (int step = 0; step < 4; step++)
+		{
+			// 1. DRIFT: Update positions using current velocity
+			for (int i = 0; i < s; i++)
+			{
+				if (bodies[i]->movability)
+				{
+					bodies[i]->m_posVec += bodies[i]->m_velVec * (c[step] * dt);
+				}
+			}
+
+			// 2. KICK: Calculate new forces and update velocities
+			// (Sub-step 4 is drift-only, so we stop after 3 kicks)
+			if (step < 3)
+			{
+				resolve(bodies); // Re-evaluate accelerations at the new positions
+
+				for (int i = 0; i < s; i++)
+				{
+					if (bodies[i]->movability)
+					{
+						bodies[i]->m_velVec += bodies[i]->m_accVec * (d[step] * dt);
+					}
+				}
+			}
+		}
+	}
+
+		// Helper function to resolve both Acceleration AND Jerk at current positions/velocities
+// Helper function to resolve both Acceleration AND Jerk at current positions/velocities
+// Helper function to resolve both Acceleration AND Jerk at current positions/velocities
+	void resolveWithJerk(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		int s = bodies.size();
+		double eps = 0.1; // Softening factor to match your pull() function
+
+		// Reset accelerations and jerks
+		for (int i = 0; i < s; i++) {
+			bodies[i]->m_accVec = vectorP(0, 0);
+			bodies[i]->m_jerkVec = vectorP(0, 0);
+		}
+
+		// Pairwise N-Body force & jerk calculation
+		for (int i = 0; i < s; i++) {
+			for (int j = i + 1; j < s; j++) {
+				vectorP r = bodies[j]->m_posVec - bodies[i]->m_posVec;
+				vectorP v = bodies[j]->m_velVec - bodies[i]->m_velVec;
+
+				double r2 = r.magSq() + (eps * eps);
+				double r1 = std::sqrt(r2);
+				double r3 = r2 * r1;
+				double r5 = r3 * r2;
+
+				double v_dot_r = (v.icap * r.icap + v.jcap * r.jcap);
+
+				double g_mj = physics::G * bodies[j]->m_Mass;
+				double g_mi = physics::G * bodies[i]->m_Mass;
+
+				if (bodies[i]->movability) {
+					bodies[i]->m_accVec  += r * (g_mj / r3);
+					bodies[i]->m_jerkVec += (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mj;
+				}
+
+				if (bodies[j]->movability) {
+					bodies[j]->m_accVec  -= r * (g_mi / r3);
+					bodies[j]->m_jerkVec -= (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mi;
+				}
+			}
+		}
+
+		// Keep m_forVec updated so collision checks and UI display stay synced!
+		for (int i = 0; i < s; i++) {
+			bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
+		}
+	}
+
+	// 4th-Order Hermite Predictor-Corrector Integrator (PECE)
+	void moveHermite(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		int s = bodies.size();
+
+		// -------------------------------------------------------------
+		// 0. EVALUATE INITIAL STATE: Guarantee exact a_old and j_old at current positions
+		// -------------------------------------------------------------
+		resolveWithJerk(bodies);
+
+		// Buffers to store initial state & predictions
+		std::vector<vectorP> x_old(s), v_old(s), a_old(s), j_old(s);
+		std::vector<vectorP> x_pred(s), v_pred(s);
+
+		double dt2 = dt * dt;
+		double dt3 = dt2 * dt;
+		double dt4 = dt3 * dt;
+		double dt5 = dt4 * dt;
+
+		// -------------------------------------------------------------
+		// 1. PREDICT: Extrapolate state using exact current a and j
+		// -------------------------------------------------------------
+		for (int i = 0; i < s; i++) {
+			if (!bodies[i]->movability) continue;
+
+			x_old[i] = bodies[i]->m_posVec;
+			v_old[i] = bodies[i]->m_velVec;
+			a_old[i] = bodies[i]->m_accVec;
+			j_old[i] = bodies[i]->m_jerkVec;
+
+			// Taylor expansion prediction
+			x_pred[i] = x_old[i] + v_old[i] * dt + a_old[i] * (0.5 * dt2) + j_old[i] * (1.0 / 6.0 * dt3);
+			v_pred[i] = v_old[i] + a_old[i] * dt + j_old[i] * (0.5 * dt2);
+
+			// Temporarily set body state to predicted state
+			bodies[i]->m_posVec = x_pred[i];
+			bodies[i]->m_velVec = v_pred[i];
+		}
+
+		// -------------------------------------------------------------
+		// 2. EVALUATE PREDICTION: Compute new accelerations & jerks at predicted state
+		// -------------------------------------------------------------
+		resolveWithJerk(bodies);
+
+		// -------------------------------------------------------------
+		// 3. CORRECT: Calculate higher derivatives and refine state
+		// -------------------------------------------------------------
+		for (int i = 0; i < s; i++) {
+			if (!bodies[i]->movability) continue;
+
+			vectorP a_new = bodies[i]->m_accVec;
+			vectorP j_new = bodies[i]->m_jerkVec;
+
+			// Calculate Snap (2nd derivative of acceleration) and Crackle (3rd derivative)
+			vectorP snap = ( (a_old[i] - a_new) * -6.0 - (j_old[i] * 4.0 + j_new * 2.0) * dt ) * (1.0 / dt2);
+			vectorP crackle = ( (a_old[i] - a_new) * 12.0 + (j_old[i] + j_new) * (6.0 * dt) ) * (1.0 / dt3);
+
+			// Apply final 4th-order corrected positions and velocities
+			bodies[i]->m_posVec = x_pred[i] + snap * (1.0 / 24.0 * dt4) + crackle * (1.0 / 120.0 * dt5);
+			bodies[i]->m_velVec = v_pred[i] + snap * (1.0 / 6.0 * dt3)  + crackle * (1.0 / 24.0 * dt4);
+		}
 	}
 }
 
@@ -889,7 +1037,7 @@ int main()
 			double ogKE ,ogPE ,ogE , ogangP ;
 			vectorP oglinP;
 
-			const float RENDER_SCALE = 0.25f;
+			float RENDER_SCALE = 0.25f;
 
 			eos( ogKE, ogPE, ogE , bodys);
 			linearP(oglinP , bodys);
@@ -988,9 +1136,7 @@ int main()
 						{
 							frame++;
 
-
-
-							physics::move(bodys);
+							physics::moveYoshida(bodys);
 
 							eos(KE , PE , E , bodys);
 							Edifn = E - ogE;
@@ -1004,6 +1150,8 @@ int main()
 							LOG("Net Ediffn : " << Edifn);
 							LOG("Net linPdiffn : " << linPdiffn.mag());
 							LOG("Net angPdiffn : " << angPdiffn);
+
+							//bodys[1]->GetVal();
 
 							auto colData = (physics::checkCol(bodys,colClusters));
 							auto killed = std::move(colData.deadBodies);
@@ -1179,7 +1327,7 @@ int main()
 								EndDrawing();
 							}
 
-							physics::move(bodys);
+							physics::moveYoshida(bodys);
 
 							eos(KE , PE , E , bodys);
 
@@ -1313,7 +1461,7 @@ int main()
 						EndDrawing();*/
 
 
-						physics::move(bodys);
+						physics::moveYoshida(bodys);
 
 
 						eos(KE , PE , E , bodys);
