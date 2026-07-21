@@ -5,6 +5,7 @@
 #include "EndBrace.h"
 
 double dt = (1.0f / 120.0f);
+constexpr double G = 6.67430e-11;
 
 class Body;
 class vectorP;
@@ -226,6 +227,240 @@ struct CollisionResult {
 	std::vector<std::vector<Body>> clusters;
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  BARNES-HUT  O(N log N) gravity — paste inside namespace physics { },
+//  right before the closing } at the end of the namespace (after moveHermite).
+//
+//  Provides three drop-in replacements:
+//    resolveBarnesHut   → replace  resolve()          in moveVerlet / moveYoshida
+//    resolveWithJerkBH  → replace  resolveWithJerk()  in moveHermite
+//    computeAccelBH     → replace  computeAccel()     in moveRK45
+//
+//  Theta (opening-angle criterion):
+//    0.0 = exact O(N²)   0.5 = standard   1.0 = fast/coarse
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ──────────────────────────────────────────────────────────────────────────
+//  Internal quadtree implementation
+// ──────────────────────────────────────────────────────────────────────────
+namespace bh {
+
+    // Each node represents one cell of the recursive square partition.
+    //
+    //  Quadrant layout (bit-field: x-bit | y-bit):
+    //    0 = SW  (x < cx, y < cy)
+    //    1 = SE  (x ≥ cx, y < cy)
+    //    2 = NW  (x < cx, y ≥ cy)
+    //    3 = NE  (x ≥ cx, y ≥ cy)
+    struct Node {
+        double cx, cy;        // centre of the bounding square
+        double half;          // half-side (square spans [cx-half,cx+half] × [cy-half,cy+half])
+        double mass;          // total mass of all particles in sub-tree
+        double com_x, com_y;  // centre-of-mass position
+        double com_vx,com_vy; // centre-of-mass velocity  (only set when building for jerk)
+        int    body;          // ≥ 0 : leaf holding this body index
+                              // -1  : internal node or empty leaf
+        int    ch[4];         // child node indices; -1 = child absent
+    };
+
+    // Bump allocator: the pool is pre-sized before any inserts so it never
+    // reallocates during the build, keeping Node& references valid throughout.
+    static std::vector<Node> pool;
+    static int               next_node;
+
+    static int alloc(double cx, double cy, double half)
+    {
+        int idx = next_node++;
+        pool[idx] = { cx, cy, half,  0,0,0,  0,0,  -1, {-1,-1,-1,-1} };
+        return idx;
+    }
+
+    // Quadrant of (px,py) relative to box centre (cx,cy)
+    inline int quadrant(double cx, double cy, double px, double py)
+    {
+        return (px >= cx ? 1 : 0) | (py >= cy ? 2 : 0);
+    }
+
+    // Child centre for quadrant q at current centre (cx,cy) and half-size half
+    inline double child_cx(double cx, double half, int q) { return cx + ((q & 1) ? half : -half); }
+    inline double child_cy(double cy, double half, int q) { return cy + ((q & 2) ? half : -half); }
+
+    // ── Insert body bi into the sub-tree rooted at node_idx ──────────────
+    // All accesses use pool[idx] (index, never a cached reference) so they
+    // remain correct even if this function is called recursively and triggers
+    // further alloc() calls inside the same pre-allocated buffer.
+    //
+    // vel_ptr: pointer to velocity array; nullptr when jerk is not needed.
+    static void insert(int bi, double px, double py, double bm, double bvx, double bvy,
+                       const std::vector<vectorP>& pos,
+                       const std::vector<double>&  masses,
+                       const std::vector<vectorP>* vel_ptr,
+                       int node_idx)
+    {
+        while (true) {
+            // ── Case 1: empty leaf → place body here ──────────────────────
+            bool empty = (pool[node_idx].body == -1 &&
+                          pool[node_idx].ch[0] == -1 && pool[node_idx].ch[1] == -1 &&
+                          pool[node_idx].ch[2] == -1 && pool[node_idx].ch[3] == -1);
+            if (empty) {
+                pool[node_idx].body  = bi;
+                pool[node_idx].mass  = bm;
+                pool[node_idx].com_x = px;  pool[node_idx].com_y = py;
+                pool[node_idx].com_vx= bvx; pool[node_idx].com_vy= bvy;
+                return;
+            }
+
+            // Update this node's aggregate mass and centre-of-mass
+            double new_mass = pool[node_idx].mass + bm;
+            pool[node_idx].com_x  = (pool[node_idx].com_x  * pool[node_idx].mass + px  * bm) / new_mass;
+            pool[node_idx].com_y  = (pool[node_idx].com_y  * pool[node_idx].mass + py  * bm) / new_mass;
+            pool[node_idx].com_vx = (pool[node_idx].com_vx * pool[node_idx].mass + bvx * bm) / new_mass;
+            pool[node_idx].com_vy = (pool[node_idx].com_vy * pool[node_idx].mass + bvy * bm) / new_mass;
+            pool[node_idx].mass   = new_mass;
+
+            // ── Case 2: occupied leaf → subdivide ─────────────────────────
+            // Promote to internal node, push the resident body to a child,
+            // then fall through to insert bi (tail-call via the while loop).
+            int existing = pool[node_idx].body;
+            if (existing != -1) {
+                pool[node_idx].body = -1;
+
+                // Guard against infinite subdivision when two particles
+                // sit at (nearly) identical positions.
+                if (pool[node_idx].half >= 1e-10) {
+                    double cx = pool[node_idx].cx, cy = pool[node_idx].cy;
+                    double h2 = pool[node_idx].half * 0.5;
+
+                    double ex  = pos[existing].icap, ey  = pos[existing].jcap;
+                    double evx = vel_ptr ? (*vel_ptr)[existing].icap : 0.0;
+                    double evy = vel_ptr ? (*vel_ptr)[existing].jcap : 0.0;
+                    int q_ex   = quadrant(cx, cy, ex, ey);
+
+                    if (pool[node_idx].ch[q_ex] == -1)
+                        pool[node_idx].ch[q_ex] = alloc(child_cx(cx, h2, q_ex),
+                                                        child_cy(cy, h2, q_ex), h2);
+
+                    // Recursive call depth ≤ tree depth ≈ O(log(domain/eps)) ≈ 50 max.
+                    insert(existing, ex, ey, masses[existing], evx, evy,
+                           pos, masses, vel_ptr, pool[node_idx].ch[q_ex]);
+                    // pool[node_idx] still valid — no realloc (pre-allocated pool)
+                }
+            }
+
+            // ── Case 3: descend for bi ────────────────────────────────────
+            double cx = pool[node_idx].cx, cy = pool[node_idx].cy;
+            double h2 = pool[node_idx].half * 0.5;
+            int q = quadrant(cx, cy, px, py);
+
+            if (pool[node_idx].ch[q] == -1)
+                pool[node_idx].ch[q] = alloc(child_cx(cx, h2, q), child_cy(cy, h2, q), h2);
+
+            node_idx = pool[node_idx].ch[q];   // tail-call as iteration
+        }
+    }
+
+    // ── Apply the contribution of one node (or leaf body) to (ax,ay,jx,jy) ─
+    static inline void apply(double mass_n, double dx, double dy,
+                              double dvx, double dvy,
+                              double& ax, double& ay,
+                              double* jx, double* jy)
+    {
+        // r²_softened = |r|² + ε²   (ε = 0.1 matches the value used in resolve/computeAccel)
+        double r2s    = dx*dx + dy*dy + 0.01;
+        double inv_r  = 1.0 / std::sqrt(r2s);
+        double inv_r3 = inv_r * inv_r * inv_r;
+
+        ax += G * mass_n * dx * inv_r3;
+        ay += G * mass_n * dy * inv_r3;
+
+        if (jx) {   // jerk: d/dt[a] = G*M*[v_rel/r³ − 3(v_rel·r)r/r⁵]
+            double vdr    = dvx*dx + dvy*dy;
+            double inv_r5 = inv_r3 * inv_r * inv_r;
+            *jx += G * mass_n * (dvx * inv_r3 - 3.0 * vdr * dx * inv_r5);
+            *jy += G * mass_n * (dvy * inv_r3 - 3.0 * vdr * dy * inv_r5);
+        }
+    }
+
+    // ── Tree-walk: accumulate force (and optionally jerk) on body bi ──────
+    // theta_sq = θ².  jx/jy may be nullptr when jerk is not needed.
+    static void walk(int node_idx, int bi,
+                     double bx, double by, double bvx, double bvy,
+                     double theta_sq,
+                     double& ax, double& ay,
+                     double* jx, double* jy)
+    {
+        if (node_idx == -1) return;
+        const Node& n = pool[node_idx];   // read-only walk — no alloc → reference safe
+        if (n.mass == 0.0) return;
+
+        double dx = n.com_x - bx, dy = n.com_y - by;
+        double r2 = dx*dx + dy*dy;          // geometric r² (no softening, used for criterion)
+
+        // ── Leaf: direct pair ─────────────────────────────────────────────
+        if (n.body != -1) {
+            if (n.body == bi) return;       // skip self-interaction
+            apply(n.mass, dx, dy,
+                  n.com_vx - bvx, n.com_vy - bvy,
+                  ax, ay, jx, jy);
+            return;
+        }
+
+        // ── Internal node: opening-angle criterion ────────────────────────
+        // s = 2*half (cell width).  Accept approximation when s²/r² < θ²,
+        // i.e. 4*half² < θ²*r².  Using squared form avoids a sqrt here.
+        if (r2 > 0.0 && 4.0 * n.half * n.half < theta_sq * r2) {
+            apply(n.mass, dx, dy,
+                  n.com_vx - bvx, n.com_vy - bvy,
+                  ax, ay, jx, jy);
+            return;
+        }
+
+        // ── Open: recurse into children ───────────────────────────────────
+        for (int q = 0; q < 4; q++)
+            walk(n.ch[q], bi, bx, by, bvx, bvy, theta_sq, ax, ay, jx, jy);
+    }
+
+    // ── Build the quadtree from scratch ───────────────────────────────────
+    // vel_ptr: nullptr → skip velocity tracking (jerk not needed)
+    // Returns root node index.
+    static int build(const std::vector<vectorP>& pos,
+                     const std::vector<double>&  masses,
+                     const std::vector<vectorP>* vel_ptr = nullptr)
+    {
+        const int s = (int)pos.size();
+
+        // Bounding square enclosing all particles
+        double xmin = pos[0].icap, xmax = pos[0].icap;
+        double ymin = pos[0].jcap, ymax = pos[0].jcap;
+        for (int i = 1; i < s; i++) {
+            xmin = std::min(xmin, pos[i].icap); xmax = std::max(xmax, pos[i].icap);
+            ymin = std::min(ymin, pos[i].jcap); ymax = std::max(ymax, pos[i].jcap);
+        }
+        double cx   = (xmin + xmax) * 0.5, cy = (ymin + ymax) * 0.5;
+        // half must be strictly larger than any particle offset so no body
+        // sits exactly on a cell boundary.
+        double half = std::max({ (xmax - xmin) * 0.5,
+                                 (ymax - ymin) * 0.5,
+                                 1e-6 }) * 1.001;
+
+        // Pre-allocate pool.  Worst-case nodes per body ≈ tree_depth ≈ 60
+        // (double precision, domain/eps ≈ 1e14).  64*s is a safe upper bound.
+        int max_nodes = std::max(64 * s, 256);
+        if ((int)pool.size() < max_nodes) pool.resize(max_nodes);
+        next_node = 0;
+
+        int root = alloc(cx, cy, half);
+        for (int i = 0; i < s; i++) {
+            double vx = vel_ptr ? (*vel_ptr)[i].icap : 0.0;
+            double vy = vel_ptr ? (*vel_ptr)[i].jcap : 0.0;
+            insert(i, pos[i].icap, pos[i].jcap, masses[i], vx, vy,
+                   pos, masses, vel_ptr, root);
+        }
+        return root;
+    }
+
+} // namespace bh
+
 namespace physics {
 	constexpr double G = 6.67430e-11;
 
@@ -441,6 +676,167 @@ namespace physics {
 		bodies[s - 1]->updateVal();
 	}
 
+	void resolveWithJerk(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		int s = bodies.size();
+		double eps = 0.1; // Softening factor to match your pull() function
+
+		// Reset accelerations and jerks
+		for (int i = 0; i < s; i++) {
+			bodies[i]->m_accVec = vectorP(0, 0);
+			bodies[i]->m_jerkVec = vectorP(0, 0);
+		}
+
+		// Pairwise N-Body force & jerk calculation
+		for (int i = 0; i < s; i++) {
+			for (int j = i + 1; j < s; j++) {
+				vectorP r = bodies[j]->m_posVec - bodies[i]->m_posVec;
+				vectorP v = bodies[j]->m_velVec - bodies[i]->m_velVec;
+
+				double r2 = r.magSq() + (eps * eps);
+				double r1 = std::sqrt(r2);
+				double r3 = r2 * r1;
+				double r5 = r3 * r2;
+
+				double v_dot_r = (v.icap * r.icap + v.jcap * r.jcap);
+
+				double g_mj = physics::G * bodies[j]->m_Mass;
+				double g_mi = physics::G * bodies[i]->m_Mass;
+
+				if (bodies[i]->movability) {
+					bodies[i]->m_accVec  += r * (g_mj / r3);
+					bodies[i]->m_jerkVec += (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mj;
+				}
+
+				if (bodies[j]->movability) {
+					bodies[j]->m_accVec  -= r * (g_mi / r3);
+					bodies[j]->m_jerkVec -= (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mi;
+				}
+			}
+		}
+
+		// Keep m_forVec updated so collision checks and UI display stay synced!
+		for (int i = 0; i < s; i++) {
+			bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
+		}
+	}
+	// ── Pure force helper — reads positions from argument, does NOT touch body state ──
+	static void computeAccel(
+		const std::vector<vectorP>&               pos,
+		std::vector<vectorP>&                     a_out,
+		const std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		const int s = (int)bodies.size();
+		constexpr double eps = 0.1;
+
+		for (int i = 0; i < s; i++) a_out[i] = vectorP(0, 0);
+
+		for (int i = 0; i < s - 1; i++) {
+			for (int j = i + 1; j < s; j++) {
+				vectorP r  = pos[j] - pos[i];
+				double  r2 = r.magSq() + eps * eps;
+				double  r3 = r2 * std::sqrt(r2);
+				if (bodies[i]->movability) a_out[i] += r * (G * bodies[j]->m_Mass / r3);
+				if (bodies[j]->movability) a_out[j] -= r * (G * bodies[i]->m_Mass / r3);
+			}
+		}
+	}
+
+
+	// ──────────────────────────────────────────────────────────────────────────
+	//  Public API
+	// ──────────────────────────────────────────────────────────────────────────
+
+	// Shared theta.  Change here to tune accuracy vs speed globally.
+	static constexpr double BH_THETA = 0.5;
+
+	// ── Drop-in for computeAccel() — used inside moveRK45 ────────────────────
+	// Same signature; swap "computeAccel" → "computeAccelBH" in moveRK45.
+	void computeAccelBH(
+	    const std::vector<vectorP>&               pos,
+	    std::vector<vectorP>&                     a_out,
+	    const std::vector<std::unique_ptr<Body>>& bodies,
+	    double theta = BH_THETA)
+	{
+	    const int s = (int)bodies.size();
+	    for (int i = 0; i < s; i++) a_out[i] = vectorP(0, 0);
+	    if (s < 2) return;
+
+	    std::vector<double> masses(s);
+	    for (int i = 0; i < s; i++) masses[i] = bodies[i]->m_Mass;
+
+	    int    root    = bh::build(pos, masses);
+	    double theta_sq = theta * theta;
+
+	    for (int i = 0; i < s; i++) {
+	        if (!bodies[i]->movability) continue;
+	        double ax = 0, ay = 0;
+	        bh::walk(root, i, pos[i].icap, pos[i].jcap, 0, 0, theta_sq, ax, ay, nullptr, nullptr);
+	        a_out[i] = vectorP(ax, ay);
+	    }
+	}
+
+	// ── Drop-in for resolve() — used in moveVerlet / moveYoshida ─────────────
+	// Swap "resolve(bodies)" → "resolveBarnesHut(bodies)" in those functions.
+	void resolveBarnesHut(std::vector<std::unique_ptr<Body>>& bodies,
+	                      double theta = BH_THETA)
+	{
+	    const int s = (int)bodies.size();
+	    std::vector<vectorP> pos(s), a(s);
+	    std::vector<double>  masses(s);
+	    for (int i = 0; i < s; i++) {
+	        pos[i]    = bodies[i]->m_posVec;
+	        masses[i] = bodies[i]->m_Mass;
+	    }
+
+	    int    root     = bh::build(pos, masses);
+	    double theta_sq = theta * theta;
+
+	    for (int i = 0; i < s; i++) {
+	        if (!bodies[i]->movability) continue;
+	        double ax = 0, ay = 0;
+	        bh::walk(root, i, pos[i].icap, pos[i].jcap, 0, 0, theta_sq, ax, ay, nullptr, nullptr);
+	        bodies[i]->m_accVec = vectorP(ax, ay);
+	        bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
+	    }
+	}
+
+	// ── Drop-in for resolveWithJerk() — used in moveHermite ──────────────────
+	// Swap "resolveWithJerk(bodies)" → "resolveWithJerkBH(bodies)" there.
+	// Also tracks centre-of-mass velocity per node so the Hermite jerk
+	//   ȧ = G M [ v_rel/r³ − 3(v_rel·r)r/r⁵ ]
+	// uses the approximate COM velocity of each accepted cell.
+	void resolveWithJerkBH(std::vector<std::unique_ptr<Body>>& bodies,
+	                       double theta = BH_THETA)
+	{
+	    const int s = (int)bodies.size();
+	    std::vector<vectorP> pos(s), vel(s);
+	    std::vector<double>  masses(s);
+	    for (int i = 0; i < s; i++) {
+	        pos[i]    = bodies[i]->m_posVec;
+	        vel[i]    = bodies[i]->m_velVec;
+	        masses[i] = bodies[i]->m_Mass;
+	    }
+
+	    // Build tree with velocity tracking (needed for jerk approximation)
+	    int    root     = bh::build(pos, masses, &vel);
+	    double theta_sq = theta * theta;
+
+	    for (int i = 0; i < s; i++) {
+	        if (!bodies[i]->movability) continue;
+	        double ax = 0, ay = 0, jx = 0, jy = 0;
+	        bh::walk(root, i,
+	                 pos[i].icap, pos[i].jcap,
+	                 vel[i].icap, vel[i].jcap,
+	                 theta_sq, ax, ay, &jx, &jy);
+	        bodies[i]->m_accVec  = vectorP(ax, ay);
+	        bodies[i]->m_jerkVec = vectorP(jx, jy);
+	        bodies[i]->m_forVec  = bodies[i]->m_accVec * bodies[i]->m_Mass;
+	    }
+	}
+
+
+
 	void moveVerlet(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		resolve(bodies);
@@ -508,50 +904,6 @@ namespace physics {
 		// Helper function to resolve both Acceleration AND Jerk at current positions/velocities
 // Helper function to resolve both Acceleration AND Jerk at current positions/velocities
 // Helper function to resolve both Acceleration AND Jerk at current positions/velocities
-	void resolveWithJerk(std::vector<std::unique_ptr<Body>>& bodies)
-	{
-		int s = bodies.size();
-		double eps = 0.1; // Softening factor to match your pull() function
-
-		// Reset accelerations and jerks
-		for (int i = 0; i < s; i++) {
-			bodies[i]->m_accVec = vectorP(0, 0);
-			bodies[i]->m_jerkVec = vectorP(0, 0);
-		}
-
-		// Pairwise N-Body force & jerk calculation
-		for (int i = 0; i < s; i++) {
-			for (int j = i + 1; j < s; j++) {
-				vectorP r = bodies[j]->m_posVec - bodies[i]->m_posVec;
-				vectorP v = bodies[j]->m_velVec - bodies[i]->m_velVec;
-
-				double r2 = r.magSq() + (eps * eps);
-				double r1 = std::sqrt(r2);
-				double r3 = r2 * r1;
-				double r5 = r3 * r2;
-
-				double v_dot_r = (v.icap * r.icap + v.jcap * r.jcap);
-
-				double g_mj = physics::G * bodies[j]->m_Mass;
-				double g_mi = physics::G * bodies[i]->m_Mass;
-
-				if (bodies[i]->movability) {
-					bodies[i]->m_accVec  += r * (g_mj / r3);
-					bodies[i]->m_jerkVec += (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mj;
-				}
-
-				if (bodies[j]->movability) {
-					bodies[j]->m_accVec  -= r * (g_mi / r3);
-					bodies[j]->m_jerkVec -= (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mi;
-				}
-			}
-		}
-
-		// Keep m_forVec updated so collision checks and UI display stay synced!
-		for (int i = 0; i < s; i++) {
-			bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
-		}
-	}
 
 	// 4th-Order Hermite Predictor-Corrector Integrator (PECE)
 	void moveHermite(std::vector<std::unique_ptr<Body>>& bodies, double& dt)
@@ -612,6 +964,125 @@ namespace physics {
 
 		dt = std::max(dt_candidate, 1e-7);  // floor prevents dt → 0 on singular configs
 	}
+
+
+    // ── Dormand-Prince RK45 with error-controlled adaptive step ──
+    // Accepts/rejects internally (no retry needed by caller).
+    // On exit: global dt = h suggested for the NEXT step.
+    // Returns: h that was actually used this step → add to your phys_time accumulator.
+    double moveRK45(std::vector<std::unique_ptr<Body>>& bodies)
+    {
+        const int s = (int)bodies.size();
+
+        // Butcher tableau (DOPRI5)
+        // A[st][j] = coefficient for k_{j+1} when building stage st+2 (0-indexed)
+        static constexpr double A[6][6] = {
+            /*k2*/ { 1.0/5.0,          0,               0,              0,              0,              0         },
+            /*k3*/ { 3.0/40.0,         9.0/40.0,        0,              0,              0,              0         },
+            /*k4*/ { 44.0/45.0,       -56.0/15.0,       32.0/9.0,       0,              0,              0         },
+            /*k5*/ { 19372.0/6561.0,  -25360.0/2187.0,  64448.0/6561.0,-212.0/729.0,   0,              0         },
+            /*k6*/ { 9017.0/3168.0,    -355.0/33.0,     46732.0/5247.0, 49.0/176.0,   -5103.0/18656.0, 0         },
+            /*k7*/ { 35.0/384.0,        0.0,            500.0/1113.0,  125.0/192.0,   -2187.0/6784.0,  11.0/84.0 }
+        };
+        // e[j] = b5[j] − b4[j]: DOPRI5 error coefficients
+        static constexpr double E[7] = {
+             71.0/57600.0,  0.0, -71.0/16695.0,
+             71.0/1920.0,  -17253.0/339200.0,
+             22.0/525.0,   -1.0/40.0
+        };
+
+        constexpr double RTOL    = 1e-6;
+        constexpr double ATOL    = 1e-9;
+        constexpr double SAFETY  = 0.9;
+        constexpr double MAX_FAC = 5.0;
+        constexpr double MIN_FAC = 0.2;
+        constexpr double DT_MIN  = 1.0 / 50000.0;
+        constexpr double DT_MAX  = 1.0 / 30.0;
+
+        // Snapshot of (x0, v0) — never modified across retries
+        std::vector<vectorP> x0(s), v0(s);
+        for (int i = 0; i < s; i++) {
+            x0[i] = bodies[i]->m_posVec;
+            v0[i] = bodies[i]->m_velVec;
+        }
+
+        // Stage buffers: kx[j] = velocity at stage j, kv[j] = acceleration at stage j
+        std::vector<std::vector<vectorP>> kx(7, std::vector<vectorP>(s));
+        std::vector<std::vector<vectorP>> kv(7, std::vector<vectorP>(s));
+
+        // k1 depends only on (x0,v0), not on h — compute once outside the retry loop
+        for (int i = 0; i < s; i++) kx[0][i] = v0[i];
+        //computeAccel(x0, kv[0], bodies);
+		computeAccelBH(x0, kv[0], bodies);
+
+        double h = dt;
+
+        for (;;) {   // retry loop: repeats only on step rejection
+            std::vector<vectorP> xs(s), vs(s), as(s);
+
+            // Stages k2..k7
+            // After st=6: xs = x5 (5th-order solution), vs = v5  [FSAL: A[5] == b5[0..5]]
+            for (int st = 1; st <= 6; st++) {
+                for (int i = 0; i < s; i++) {
+                    if (!bodies[i]->movability) { xs[i] = x0[i]; vs[i] = v0[i]; continue; }
+                    xs[i] = x0[i];
+                    vs[i] = v0[i];
+                    for (int j = 0; j < st; j++) {
+                        xs[i] += kx[j][i] * (h * A[st-1][j]);
+                        vs[i] += kv[j][i] * (h * A[st-1][j]);
+                    }
+                    kx[st][i] = vs[i];  // dx/dt at this stage point
+                }
+                //computeAccel(xs, as, bodies);
+                computeAccelBH(xs, as, bodies);
+                for (int i = 0; i < s; i++) kv[st][i] = as[i];  // dv/dt at this stage
+            }
+            // xs = x5, vs = v5, kv[6] = a(x5) after the loop above
+
+            // Error estimate: err_component = h * Σ_j E[j] * k_j
+            double err_sq = 0.0;
+            int    n_dof  = 0;
+            for (int i = 0; i < s; i++) {
+                if (!bodies[i]->movability) continue;
+                vectorP ex(0,0), ev(0,0);
+                for (int j = 0; j < 7; j++) {
+                    ex += kx[j][i] * (h * E[j]);
+                    ev += kv[j][i] * (h * E[j]);
+                }
+                // Mixed absolute/relative scale: sc = ATOL + RTOL * max(|y0|, |y1|)
+                auto sqsc = [&](double e_c, double y0_c, double y1_c) {
+                    double sc = ATOL + RTOL * std::max(std::abs(y0_c), std::abs(y1_c));
+                    return (e_c / sc) * (e_c / sc);
+                };
+                err_sq += sqsc(ex.icap, x0[i].icap, xs[i].icap);
+                err_sq += sqsc(ex.jcap, x0[i].jcap, xs[i].jcap);
+                err_sq += sqsc(ev.icap, v0[i].icap, vs[i].icap);
+                err_sq += sqsc(ev.jcap, v0[i].jcap, vs[i].jcap);
+                n_dof += 4;
+            }
+            double err = (n_dof > 0) ? std::sqrt(err_sq / n_dof) : 0.0;
+
+            if (err <= 1.0 || h <= DT_MIN) {
+                // ── Accept ──
+                for (int i = 0; i < s; i++) {
+                    bodies[i]->m_posVec = xs[i];
+                    bodies[i]->m_velVec = vs[i];
+                    bodies[i]->m_accVec = kv[6][i];                        // FSAL: exact a at x5
+                    bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
+                }
+                double fac = (err > 1e-15) ? SAFETY * std::pow(1.0/err, 0.2) : MAX_FAC;
+                fac        = std::clamp(fac, MIN_FAC, MAX_FAC);
+                double h_used = h;
+                dt = std::clamp(h * fac, DT_MIN, DT_MAX);
+                return h_used;
+            }
+
+            // ── Reject: shrink h, k1 is still valid ──
+            double fac = std::max(MIN_FAC, SAFETY * std::pow(1.0/err, 0.25));
+            h = std::max(DT_MIN, h * fac);
+        }
+    }
+
 }
 
 struct BodyInput
@@ -1125,7 +1596,7 @@ int main()
 							catch (...) { hmframe = 1; }
 						}
 
-
+						double phys_time = 0.0f;
 						//auto t0 = clock::now();
 
 
@@ -1133,7 +1604,8 @@ int main()
 						{
 							frame++;
 
-							physics::moveHermite(bodys, dt);
+							//physics::moveHermite(bodys, dt);
+							phys_time += physics::moveRK45(bodys);
 
 							eos(KE , PE , E , bodys);
 							Edifn = E - ogE;
@@ -1206,6 +1678,7 @@ int main()
 								DrawText(TextFormat("position : %f" , bodys[1]->m_posVec.mag()), 0, 520, 20 , BLACK);
 
 								DrawText(TextFormat("dt : %f" , dt) , 1000 , 20, 20 , RED);
+								DrawText(TextFormat("phys_time : %f" , phys_time) , 1000 , 40, 20 , RED);
 
 								EndDrawing();
 
