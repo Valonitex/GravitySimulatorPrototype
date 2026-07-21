@@ -243,6 +243,333 @@ struct CollisionResult {
 // ──────────────────────────────────────────────────────────────────────────
 //  Internal quadtree implementation
 // ──────────────────────────────────────────────────────────────────────────
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  FAST MULTIPOLE METHOD (FMM)  O(N) 2D Gravity Engine
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace fmm {
+
+    constexpr int P = 10; // Order of expansion (P=10 gives ~10-12 digits of precision)
+    using Cplx = std::complex<double>;
+
+    // Precalculated Binomial Coefficients (Pascal's Triangle)
+    struct PascalTable {
+        double C[2 * P + 2][2 * P + 2];
+        PascalTable() {
+            for (int i = 0; i <= 2 * P + 1; ++i) {
+                for (int j = 0; j <= i; ++j) {
+                    if (j == 0 || j == i) C[i][j] = 1.0;
+                    else C[i][j] = C[i - 1][j - 1] + C[i - 1][j];
+                }
+            }
+        }
+    };
+    static const PascalTable pascal;
+
+    struct Node {
+        double cx, cy;
+        double half;
+        int level;
+        int parent;
+        int ch[4];
+        bool is_leaf;
+        std::vector<int> bodies;
+
+        Cplx M[P + 1]; // Multipole expansion
+        Cplx L[P + 1]; // Local expansion
+
+        double com_vx, com_vy; // Centre-of-mass velocity (for Jerk computation)
+
+        Node() : cx(0), cy(0), half(0), level(0), parent(-1), is_leaf(true), com_vx(0), com_vy(0) {
+            for (int i = 0; i < 4; ++i) ch[i] = -1;
+            for (int k = 0; k <= P; ++k) { M[k] = 0.0; L[k] = 0.0; }
+        }
+    };
+
+    static std::vector<Node> tree;
+    static int next_node = 0;
+
+    static int alloc_node(double cx, double cy, double half, int level, int parent) {
+        int idx = next_node++;
+        if (idx >= (int)tree.size()) tree.resize(std::max((int)tree.size() * 2, 256));
+        tree[idx] = Node();
+        tree[idx].cx = cx; tree[idx].cy = cy;
+        tree[idx].half = half; tree[idx].level = level; tree[idx].parent = parent;
+        return idx;
+    }
+
+    inline bool is_neighbor(const Node& a, const Node& b) {
+        double dx = std::abs(a.cx - b.cx);
+        double dy = std::abs(a.cy - b.cy);
+        double max_h = a.half + b.half + 1e-9;
+        return (dx <= max_h) && (dy <= max_h);
+    }
+
+    // ── Recursive Tree Build ────────────────────────────────────────────────
+    static void build_sub(int node_idx, const std::vector<vectorP>& pos, const std::vector<vectorP>* vel_ptr, int max_depth) {
+        Node& nd = tree[node_idx];
+
+        if ((int)nd.bodies.size() <= 16 || nd.level >= max_depth) {
+            nd.is_leaf = true;
+            return;
+        }
+
+        nd.is_leaf = false;
+        double h2 = nd.half * 0.5;
+
+        std::vector<int> quad_bodies[4];
+        for (int b_idx : nd.bodies) {
+            int q = (pos[b_idx].icap >= nd.cx ? 1 : 0) | (pos[b_idx].jcap >= nd.cy ? 2 : 0);
+            quad_bodies[q].push_back(b_idx);
+        }
+        nd.bodies.clear();
+
+        for (int q = 0; q < 4; ++q) {
+            if (quad_bodies[q].empty()) continue;
+            double child_cx = nd.cx + ((q & 1) ? h2 : -h2);
+            double child_cy = nd.cy + ((q & 2) ? h2 : -h2);
+
+            int child_idx = alloc_node(child_cx, child_cy, h2, nd.level + 1, node_idx);
+            tree[child_idx].bodies = std::move(quad_bodies[q]);
+            tree[node_idx].ch[q] = child_idx;
+
+            build_sub(child_idx, pos, vel_ptr, max_depth);
+        }
+    }
+
+    // ── P2M: Particle to Multipole ──────────────────────────────────────────
+    static void p2m(int node_idx, const std::vector<vectorP>& pos, const std::vector<double>& masses) {
+        Node& nd = tree[node_idx];
+        Cplx z_C(nd.cx, nd.cy);
+        for (int k = 0; k <= P; ++k) nd.M[k] = 0.0;
+
+        for (int idx : nd.bodies) {
+            Cplx z_i(pos[idx].icap, pos[idx].jcap);
+            Cplx dz = z_i - z_C;
+            double m = masses[idx];
+
+            Cplx dz_pow = 1.0;
+            for (int k = 0; k <= P; ++k) {
+                nd.M[k] += (G * m) * dz_pow;
+                dz_pow *= dz;
+            }
+        }
+    }
+
+    // ── M2M: Multipole to Multipole (Child -> Parent) ───────────────────────
+    static void m2m(int parent_idx, int child_idx) {
+        Node& p = tree[parent_idx];
+        const Node& c = tree[child_idx];
+        Cplx dz = Cplx(c.cx, c.cy) - Cplx(p.cx, p.cy);
+
+        for (int k = 0; k <= P; ++k) {
+            for (int m = 0; m <= k; ++m) {
+                p.M[k] += pascal.C[k][m] * c.M[m] * std::pow(dz, k - m);
+            }
+        }
+    }
+
+    // ── M2L: Multipole to Local (Source -> Target) ──────────────────────────
+    static void m2l(int target_idx, int source_idx) {
+        Node& target = tree[target_idx];
+        const Node& source = tree[source_idx];
+
+        Cplx D = Cplx(source.cx, source.cy) - Cplx(target.cx, target.cy);
+        Cplx invD = 1.0 / D;
+
+        std::vector<Cplx> invD_pow(2 * P + 2, 1.0);
+        for (size_t i = 1; i < invD_pow.size(); ++i) invD_pow[i] = invD_pow[i - 1] * invD;
+
+        for (int l = 0; l <= P; ++l) {
+            Cplx sum = 0.0;
+            for (int k = 0; k <= P; ++k) {
+                sum += pascal.C[l + k][k] * source.M[k] * invD_pow[l + k + 1];
+            }
+            target.L[l] += sum;
+        }
+    }
+
+    // ── L2L: Local to Local (Parent -> Child) ───────────────────────────────
+    static void l2l(int parent_idx, int child_idx) {
+        const Node& p = tree[parent_idx];
+        Node& c = tree[child_idx];
+        Cplx dz = Cplx(c.cx, c.cy) - Cplx(p.cx, p.cy);
+
+        for (int l = 0; l <= P; ++l) {
+            Cplx sum = 0.0;
+            for (int m = l; m <= P; ++m) {
+                sum += pascal.C[m][l] * p.L[m] * std::pow(dz, m - l);
+            }
+            c.L[l] += sum;
+        }
+    }
+
+    // ── L2P: Local Expansion to Acceleration & Jerk ────────────────────────
+    static void l2p(int leaf_idx, double px, double py, double vx, double vy, vectorP& acc_out, vectorP* jerk_out) {
+        const Node& nd = tree[leaf_idx];
+        Cplx dz = Cplx(px, py) - Cplx(nd.cx, nd.cy);
+
+        Cplx accel_cplx = 0.0;
+        Cplx dz_pow = 1.0;
+
+        for (int l = 0; l <= P; ++l) {
+            accel_cplx += nd.L[l] * dz_pow;
+            dz_pow *= dz;
+        }
+
+        acc_out.icap += accel_cplx.real();
+        acc_out.jcap += -accel_cplx.imag();
+
+        if (jerk_out) {
+            Cplx dz_rel_v = Cplx(vx - nd.com_vx, vy - nd.com_vy);
+            Cplx jerk_cplx = 0.0;
+            Cplx dz_pow_j = 1.0;
+
+            for (int l = 1; l <= P; ++l) {
+                jerk_cplx += (double)l * nd.L[l] * dz_pow_j * dz_rel_v;
+                dz_pow_j *= dz;
+            }
+            jerk_out->icap += jerk_cplx.real();
+            jerk_out->jcap += -jerk_cplx.imag();
+        }
+    }
+
+    // ── Core Engine Execution Routine ───────────────────────────────────────
+    static void run_fmm(const std::vector<vectorP>& pos,
+                        const std::vector<double>& masses,
+                        const std::vector<vectorP>* vel_ptr,
+                        std::vector<vectorP>& acc_out,
+                        std::vector<vectorP>* jerk_out,
+                        const std::vector<std::unique_ptr<Body>>& bodies)
+    {
+        const int n = (int)pos.size();
+        for (int i = 0; i < n; ++i) {
+            acc_out[i] = vectorP(0, 0);
+            if (jerk_out) (*jerk_out)[i] = vectorP(0, 0);
+        }
+        if (n < 2) return;
+
+        // Bounding Box
+        double xmin = pos[0].icap, xmax = pos[0].icap;
+        double ymin = pos[0].jcap, ymax = pos[0].jcap;
+        for (int i = 1; i < n; ++i) {
+            xmin = std::min(xmin, pos[i].icap); xmax = std::max(xmax, pos[i].icap);
+            ymin = std::min(ymin, pos[i].jcap); ymax = std::max(ymax, pos[i].jcap);
+        }
+        double cx = (xmin + xmax) * 0.5;
+        double cy = (ymin + ymax) * 0.5;
+        double half = std::max({ (xmax - xmin) * 0.5, (ymax - ymin) * 0.5, 1e-6 }) * 1.001;
+
+        next_node = 0;
+        int max_depth = std::min(8, (int)std::ceil(std::log2(n) / 2.0));
+        int root = alloc_node(cx, cy, half, 0, -1);
+
+        tree[root].bodies.resize(n);
+        for (int i = 0; i < n; ++i) tree[root].bodies[i] = i;
+
+        build_sub(root, pos, vel_ptr, max_depth);
+
+        // Group Nodes by Level
+        std::vector<std::vector<int>> levels(max_depth + 1);
+        std::vector<int> leaves;
+        for (int i = 0; i < next_node; ++i) {
+            levels[tree[i].level].push_back(i);
+            if (tree[i].is_leaf) leaves.push_back(i);
+        }
+
+        // 1. P2M Pass
+        for (int leaf_idx : leaves) p2m(leaf_idx, pos, masses);
+
+        // 2. M2M Pass (Upward)
+        for (int l = max_depth - 1; l >= 0; --l) {
+            for (int idx : levels[l]) {
+                if (!tree[idx].is_leaf) {
+                    for (int q = 0; q < 4; ++q) {
+                        int ch = tree[idx].ch[q];
+                        if (ch != -1) m2m(idx, ch);
+                    }
+                }
+            }
+        }
+
+        // 3. M2L Pass (Interaction Lists)
+        for (int l = 2; l <= max_depth; ++l) {
+            for (int u_idx : levels[l]) {
+                int parent_u = tree[u_idx].parent;
+                for (int p_neg : levels[l - 1]) {
+                    if (is_neighbor(tree[parent_u], tree[p_neg])) {
+                        if (tree[p_neg].is_leaf) {
+                            if (!is_neighbor(tree[u_idx], tree[p_neg])) m2l(u_idx, p_neg);
+                        } else {
+                            for (int q = 0; q < 4; ++q) {
+                                int ch = tree[p_neg].ch[q];
+                                if (ch != -1 && !is_neighbor(tree[u_idx], tree[ch])) {
+                                    m2l(u_idx, ch);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. L2L Pass (Downward)
+        for (int l = 0; l < max_depth; ++l) {
+            for (int idx : levels[l]) {
+                if (!tree[idx].is_leaf) {
+                    for (int q = 0; q < 4; ++q) {
+                        int ch = tree[idx].ch[q];
+                        if (ch != -1) l2l(idx, ch);
+                    }
+                }
+            }
+        }
+
+        // 5. Far-Field L2P + Near-Field Direct P2P Evaluation
+        for (int u_leaf : leaves) {
+            Node& u_nd = tree[u_leaf];
+
+            // Evaluate Far-Field expansion for all bodies in this leaf
+            for (int bi : u_nd.bodies) {
+                if (!bodies[bi]->movability) continue;
+                double vx = vel_ptr ? (*vel_ptr)[bi].icap : 0.0;
+                double vy = vel_ptr ? (*vel_ptr)[bi].jcap : 0.0;
+                vectorP* j_ptr = jerk_out ? &((*jerk_out)[bi]) : nullptr;
+                l2p(u_leaf, pos[bi].icap, pos[bi].jcap, vx, vy, acc_out[bi], j_ptr);
+            }
+
+            // Direct P2P for neighboring leaves
+            for (int v_leaf : leaves) {
+                if (!is_neighbor(u_nd, tree[v_leaf])) continue;
+
+                for (int i : u_nd.bodies) {
+                    if (!bodies[i]->movability) continue;
+                    for (int j : tree[v_leaf].bodies) {
+                        if (i == j) continue; // Skip self-interaction
+
+                        vectorP r = pos[j] - pos[i];
+                        double eps = 0.1;
+                        double r2 = r.magSq() + eps * eps;
+                        double inv_r = 1.0 / std::sqrt(r2);
+                        double inv_r3 = inv_r * inv_r * inv_r;
+
+                        acc_out[i] += r * (G * masses[j] * inv_r3);
+
+                        if (jerk_out && vel_ptr) {
+                            vectorP v = (*vel_ptr)[j] - (*vel_ptr)[i];
+                            double v_dot_r = v.icap * r.icap + v.jcap * r.jcap;
+                            double inv_r5 = inv_r3 * inv_r * inv_r;
+                            (*jerk_out)[i] += (v * inv_r3 - r * (3.0 * v_dot_r * inv_r5)) * (G * masses[j]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+} // namespace fmm
+
 namespace bh {
 
     // Each node represents one cell of the recursive square partition.
@@ -461,6 +788,245 @@ namespace bh {
 
 } // namespace bh
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  KS / LEVI-CIVITA REGULARIZATION ENGINE (2D N-Body Universal Adapter)
+//  Paste this directly above: namespace physics {
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace ks_regularization {
+
+    // Threshold distance: pairs closer than this will dynamically transition
+    // into KS regularized space. Tune this based on your scale!
+    static constexpr double R_KS_THRESHOLD = 2.5;
+
+    struct RegularizedPair {
+        int idxA;
+        int idxB;
+        double u1, u2;       // Regularized position u
+        double up1, up2;     // Regularized velocity u' = du/d(tau)
+        double H;            // Keplerian binding energy
+        double mu;           // Gravitational parameter G * (M1 + M2)
+        double M_tot;        // Total mass M1 + M2
+        double m1, m2;       // Individual masses
+        vectorP com_pos;     // Center of mass position
+        vectorP com_vel;     // Center of mass velocity
+    };
+
+    // ── 1. Map Physical Coordinates (x, y, vx, vy) -> KS Space (u, u') ──
+    static void physicalToKS(const vectorP& rel_pos, const vectorP& rel_vel,
+                             double M1, double M2, RegularizedPair& ks)
+    {
+        double x = rel_pos.icap;
+        double y = rel_pos.jcap;
+        double r = rel_pos.mag();
+
+        // Robust LC Position Inversion: u1^2 - u2^2 = x, 2*u1*u2 = y
+        if (x >= 0.0) {
+            ks.u1 = std::sqrt((r + x) * 0.5);
+            ks.u2 = (ks.u1 > 1e-15) ? (y / (2.0 * ks.u1)) : 0.0;
+        } else {
+            ks.u2 = (y >= 0.0 ? 1.0 : -1.0) * std::sqrt((r - x) * 0.5);
+            ks.u1 = (std::abs(ks.u2) > 1e-15) ? (y / (2.0 * ks.u2)) : 0.0;
+        }
+
+        // LC Velocity Inversion via Sundman: u' = 1/2 * r * (u_rot * v)
+        // u'_1 = 0.5 * (vx * u1 + vy * u2)
+        // u'_2 = 0.5 * (vy * u1 - vx * u2)
+        double vx = rel_vel.icap;
+        double vy = rel_vel.jcap;
+        ks.up1 = 0.5 * (vx * ks.u1 + vy * ks.u2);
+        ks.up2 = 0.5 * (vy * ks.u1 - vx * ks.u2);
+
+        // Keplerian Energy: H = 0.5 * v^2 - G*(M1+M2)/r
+        ks.mu = G * (M1 + M2);
+        double v_sq = rel_vel.magSq();
+        ks.H = 0.5 * v_sq - (ks.mu / (r + 1e-15));
+        ks.M_tot = M1 + M2;
+        ks.m1 = M1;
+        ks.m2 = M2;
+    }
+
+    // ── 2. Map KS Space (u, u') -> Physical Coordinates (x, y, vx, vy) ──
+    static void ksToPhysical(const RegularizedPair& ks, vectorP& rel_pos, vectorP& rel_vel)
+    {
+        // x = u1^2 - u2^2, y = 2*u1*u2
+        rel_pos.icap = ks.u1 * ks.u1 - ks.u2 * ks.u2;
+        rel_pos.jcap = 2.0 * ks.u1 * ks.u2;
+
+        double r = ks.u1 * ks.u1 + ks.u2 * ks.u2;
+        if (r < 1e-15) { rel_vel = vectorP(0, 0); return; }
+
+        // vx = 2*(u1*up1 - u2*up2)/r, vy = 2*(u2*up1 + u1*up2)/r
+        double inv_r = 2.0 / r;
+        rel_vel.icap = (ks.u1 * ks.up1 - ks.u2 * ks.up2) * inv_r;
+        rel_vel.jcap = (ks.u2 * ks.up1 + ks.u1 * ks.up2) * inv_r;
+    }
+
+    // ── 3. Exact Analytical Solver for the KS Harmonic Oscillator ──
+    // Solves u'' - (H/2)u = 0 over physical time step delta_t
+    static void stepKSAnalytical(RegularizedPair& ks, double delta_t)
+    {
+        double r = ks.u1 * ks.u1 + ks.u2 * ks.u2;
+        if (r < 1e-15) r = 1e-15;
+
+        // Sundman time step increment: d(tau) = dt / r
+        double dtau = delta_t / r;
+
+        double u1_new, u2_new, up1_new, up2_new;
+
+        if (ks.H < 0.0) {
+            // Bound Orbit (Elliptical): Exact Simple Harmonic Motion!
+            double omega = std::sqrt(-0.5 * ks.H);
+            double cos_wt = std::cos(omega * dtau);
+            double sin_wt = std::sin(omega * dtau);
+            double inv_omega = 1.0 / omega;
+
+            u1_new  = ks.u1 * cos_wt  + ks.up1 * inv_omega * sin_wt;
+            up1_new = -ks.u1 * omega * sin_wt + ks.up1 * cos_wt;
+
+            u2_new  = ks.u2 * cos_wt  + ks.up2 * inv_omega * sin_wt;
+            up2_new = -ks.u2 * omega * sin_wt + ks.up2 * cos_wt;
+        }
+        else if (ks.H > 0.0) {
+            // Unbound Orbit (Hyperbolic): Exponential / Hyperbolic motion
+            double omega = std::sqrt(0.5 * ks.H);
+            double cosh_wt = std::cosh(omega * dtau);
+            double sinh_wt = std::sinh(omega * dtau);
+            double inv_omega = 1.0 / omega;
+
+            u1_new  = ks.u1 * cosh_wt + ks.up1 * inv_omega * sinh_wt;
+            up1_new = ks.u1 * omega * sinh_wt + ks.up1 * cosh_wt;
+
+            u2_new  = ks.u2 * cosh_wt + ks.up2 * inv_omega * sinh_wt;
+            up2_new = ks.u2 * omega * sinh_wt + ks.up2 * cosh_wt;
+        }
+        else {
+            // Parabolic Orbit (H == 0): Linear drift in KS space
+            u1_new = ks.u1 + ks.up1 * dtau;
+            u2_new = ks.u2 + ks.up2 * dtau;
+            up1_new = ks.up1;
+            up2_new = ks.up2;
+        }
+
+        ks.u1 = u1_new; ks.u2 = u2_new;
+        ks.up1 = up1_new; ks.up2 = up2_new;
+    }
+
+    // ── 4. Universal Interceptor: Pre-Process Before Any Integrator ──
+    // Detects close pairs, extracts them into KS space, and replaces them with a COM body
+    static std::vector<RegularizedPair> extractCloseEncounters(std::vector<std::unique_ptr<Body>>& bodies)
+    {
+        std::vector<RegularizedPair> active_ks_pairs;
+        int s = (int)bodies.size();
+
+        for (int i = 0; i < s - 1; i++) {
+            if (!bodies[i] || bodies[i]->dead || !bodies[i]->movability) continue;
+
+            for (int j = i + 1; j < s; j++) {
+                if (!bodies[j] || bodies[j]->dead || !bodies[j]->movability) continue;
+
+                vectorP rel_pos = bodies[j]->m_posVec - bodies[i]->m_posVec;
+                double dist = rel_pos.mag();
+
+                // Check if they entered the KS Regularization zone (but haven't physically collided yet)
+                double min_col_dist = bodies[i]->m_radius + bodies[j]->m_radius;
+                if (dist < R_KS_THRESHOLD && dist > min_col_dist) {
+
+                    RegularizedPair pair;
+                    pair.idxA = i;
+                    pair.idxB = j;
+
+                    vectorP rel_vel = bodies[j]->m_velVec - bodies[i]->m_velVec;
+                    physicalToKS(rel_pos, rel_vel, bodies[i]->m_Mass, bodies[j]->m_Mass, pair);
+
+                    // Calculate Center of Mass (COM) state
+                    pair.com_pos = (bodies[i]->m_posVec * pair.m1 + bodies[j]->m_posVec * pair.m2) / pair.M_tot;
+                    pair.com_vel = (bodies[i]->m_velVec * pair.m1 + bodies[j]->m_velVec * pair.m2) / pair.M_tot;
+
+                    // Temporarily park Body A at the COM with combined mass so external bodies
+                    // still feel the correct gravity during the global integrator step!
+                    bodies[i]->m_posVec = pair.com_pos;
+                    bodies[i]->m_velVec = pair.com_vel;
+                    bodies[i]->m_Mass   = pair.M_tot;
+
+                    // Temporarily disable Body B so global solver ignores the internal 1/r^2 spike
+                    bodies[j]->movability = false;
+                    bodies[j]->m_posVec = pair.com_pos; // keep nearby for grid drawing
+                    bodies[j]->m_velVec = pair.com_vel;
+
+                    active_ks_pairs.push_back(pair);
+                    break; // Move to next body
+                }
+            }
+        }
+        return active_ks_pairs;
+    }
+
+    // ── 5. Universal Interceptor: Post-Process After Any Integrator ──
+    // Steps the KS binary forward and restores individual bodies to the main array
+    static void restoreCloseEncounters(std::vector<std::unique_ptr<Body>>& bodies,
+                                       std::vector<RegularizedPair>& active_ks_pairs,
+                                       double step_dt)
+    {
+        for (auto& pair : active_ks_pairs) {
+            Body* bodA = bodies[pair.idxA].get();
+            Body* bodB = bodies[pair.idxB].get();
+
+            // 1. Advance the internal binary orbit smoothly in KS space
+            stepKSAnalytical(pair, step_dt);
+
+            // 2. Map back to Cartesian physical relative coordinates
+            vectorP rel_pos(0, 0), rel_vel(0, 0);
+            ksToPhysical(pair, rel_pos, rel_vel);
+
+            // 3. Retrieve updated COM position/velocity from the global integrator
+            vectorP updated_com_pos = bodA->m_posVec;
+            vectorP updated_com_vel = bodA->m_velVec;
+
+            // 4. Restore original individual masses and reactivate Body B
+            bodA->m_Mass = pair.m1;
+            bodB->m_Mass = pair.m2;
+            bodB->movability = true;
+
+            // 5. Unpack absolute positions and velocities from COM + Relative states
+            // r_A = r_COM - (m2 / M_tot) * r_rel
+            // r_B = r_COM + (m1 / M_tot) * r_rel
+            double fracA = pair.m2 / pair.M_tot;
+            double fracB = pair.m1 / pair.M_tot;
+
+            bodA->m_posVec = updated_com_pos - rel_pos * fracA;
+            bodA->m_velVec = updated_com_vel - rel_vel * fracA;
+
+            bodB->m_posVec = updated_com_pos + rel_pos * fracB;
+            bodB->m_velVec = updated_com_vel + rel_vel * fracB;
+
+            // Update forces to reflect new positions for UI synchronization
+            bodA->updateVal();
+            bodB->updateVal();
+        }
+    }
+
+    // ── 6. Universal Sundman Time-Step Regulator (Optional Helper) ──
+    // Automatically shrinks dt globally when any two bodies approach, preventing integrator rejection
+    static double getSundmanAdaptiveDT(const std::vector<std::unique_ptr<Body>>& bodies, double base_dt) {
+        double max_inv_dist = 0.0;
+        int s = (int)bodies.size();
+        for (int i = 0; i < s - 1; i++) {
+            if (!bodies[i] || bodies[i]->dead) continue;
+            for (int j = i + 1; j < s; j++) {
+                if (!bodies[j] || bodies[j]->dead) continue;
+                double dist = (bodies[j]->m_posVec - bodies[i]->m_posVec).mag();
+                if (dist > 1e-5) max_inv_dist = std::max(max_inv_dist, 1.0 / dist);
+            }
+        }
+        // If bodies get within distance < 1.0, scale down dt smoothly
+        if (max_inv_dist > 1.0) {
+            return std::max(base_dt / max_inv_dist, 1e-7);
+        }
+        return base_dt;
+    }
+}
+
 namespace physics {
 	constexpr double G = 6.67430e-11;
 
@@ -660,6 +1226,191 @@ namespace physics {
 
 	}
 
+	// ═══════════════════════════════════════════════════════════════════════════
+	//  SPATIAL HASHING COLLISION DETECTION O(N) — Drop-in replacement for checkCol
+	// ═══════════════════════════════════════════════════════════════════════════
+
+	// Fast 64-bit bit-packing coordinate hash
+	inline uint64_t hashGridCoords(int32_t x, int32_t y) {
+		return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
+		        static_cast<uint32_t>(y);
+	}
+
+	struct CollisionResult checkColSpatialHash(
+	    std::vector<std::unique_ptr<Body>>& bodies,
+	    std::vector<std::vector<Body*>>& colClusters)
+	{
+		std::vector<std::unique_ptr<Body>> addtobodies;
+		std::vector<std::vector<Body>> tempClusters;
+		const int nBodies = static_cast<int>(bodies.size());
+		if (nBodies < 2) return { {}, {} };
+
+		// 1. DYNAMIC CELL SIZING
+		// Find the largest diameter in the current system to ensure 3x3 neighborhood capture
+		double max_diam = 1e-5;
+		for (int i = 0; i < nBodies; i++) {
+			if (!bodies[i]->dead) {
+				max_diam = std::max(max_diam, 2.0 * bodies[i]->m_radius);
+			}
+		}
+		const double cell_size = std::max(max_diam, 1.0); // Floor size to prevent div by zero
+		const double inv_cell_size = 1.0 / cell_size;
+
+		// 2. POPULATE THE SPATIAL HASH GRID
+		// Map: [Packed 64-bit Coord Key] -> [Vector of Body Indices]
+		std::unordered_map<uint64_t, std::vector<int>> spatialGrid;
+		spatialGrid.reserve(nBodies);
+
+		for (int i = 0; i < nBodies; i++) {
+			if (bodies[i]->dead) continue;
+			int32_t cx = static_cast<int32_t>(std::floor(bodies[i]->m_posVec.icap * inv_cell_size));
+			int32_t cy = static_cast<int32_t>(std::floor(bodies[i]->m_posVec.jcap * inv_cell_size));
+			spatialGrid[hashGridCoords(cx, cy)].push_back(i);
+		}
+
+		// 3. BROAD-PHASE & NARROW-PHASE COLLISION SEARCH
+		int clusterIndex = 1;
+
+		for (int i = 0; i < nBodies; i++) {
+			if (bodies[i]->dead) continue;
+			Body& boda = *bodies[i];
+
+			int32_t cx = static_cast<int32_t>(std::floor(boda.m_posVec.icap * inv_cell_size));
+			int32_t cy = static_cast<int32_t>(std::floor(boda.m_posVec.jcap * inv_cell_size));
+
+			// Query the 3x3 surrounding cell block
+			for (int32_t dx = -1; dx <= 1; dx++) {
+				for (int32_t dy = -1; dy <= 1; dy++) {
+
+					uint64_t neighborKey = hashGridCoords(cx + dx, cy + dy);
+					auto it = spatialGrid.find(neighborKey);
+					if (it == spatialGrid.end()) continue;
+
+					// Check all candidate bodies inside this cell
+					for (int j : it->second) {
+						// STRICT ORDERING: j > i avoids duplicate checks and self-comparisons
+						if (j <= i || bodies[j]->dead) continue;
+
+						Body& bodb = *bodies[j];
+						double disp = displacement(boda, bodb).mag();
+						double mindisp = boda.m_radius + bodb.m_radius;
+
+						// NARROW-PHASE: Exact boundary overlap check
+						if (disp < mindisp) {
+							int& clusInA = boda.clusterIndex;
+							int& clusInB = bodb.clusterIndex;
+
+							// Case A: New Cluster Formation
+							if (clusInA == 0 && clusInB == 0) {
+								clusInA = clusInB = clusterIndex;
+								std::vector<Body*> clusterTBP;
+								clusterTBP.push_back(bodies[i].get());
+								clusterTBP.push_back(bodies[j].get());
+								colClusters.push_back(clusterTBP);
+								clusterIndex++;
+							}
+							// Case B: Cluster Expansion or Merging
+							else if (clusInA != clusInB) {
+								if (clusInB == 0) clusInB = clusInA;
+								if (clusInA == 0) clusInA = clusInB;
+
+								if (clusInA < clusInB) {
+									auto& clusterB = colClusters[clusInB - 1];
+									for (size_t k = 0; k < clusterB.size(); k++) {
+										clusterB[k]->clusterIndex = clusInA;
+									}
+									clusterB.clear();
+								}
+								else if (clusInA > clusInB) {
+									auto& clusterA = colClusters[clusInA - 1];
+									for (size_t k = 0; k < clusterA.size(); k++) {
+										clusterA[k]->clusterIndex = clusInB;
+									}
+									clusterA.clear();
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// 4. CLUSTER RESOLUTION & BODY MERGING (Identical to your original logic)
+		colClusters.clear();
+		colClusters.resize(clusterIndex - 1);
+		bodies.reserve(bodies.size() + colClusters.size());
+
+		for (size_t j = 0; j < bodies.size(); j++) {
+			if (bodies[j]->clusterIndex > 0) {
+				colClusters[bodies[j]->clusterIndex - 1].push_back(bodies[j].get());
+			}
+		}
+
+		for (size_t i = 0; i < colClusters.size(); i++) {
+			if (colClusters[i].empty()) continue;
+
+			float   totalMass  = 0.0f;
+			vectorP wPos       = vectorP(0, 0);
+			vectorP wVel       = vectorP(0, 0);
+			vectorP totalForce = vectorP(0, 0);
+			double  totalVol   = 0.0;
+
+			for (size_t k = 0; k < colClusters[i].size(); k++) {
+				Body& b = *(colClusters[i][k]);
+				totalMass  += b.m_Mass;
+				wPos       += b.m_posVec * b.m_Mass;
+				wVel       += b.m_velVec * b.m_Mass;
+				totalForce += b.m_forVec;
+				totalVol   += b.m_radius * b.m_radius * b.m_radius;
+				b.dead = true;
+			}
+
+			Body mergedBody      = *(colClusters[i][0]);
+			mergedBody.m_Mass    = totalMass;
+			mergedBody.m_posVec  = wPos / totalMass;
+			mergedBody.m_velVec  = wVel / totalMass;
+			mergedBody.m_forVec  = totalForce;
+			mergedBody.m_radius  = pow(totalVol, 1.0 / 3.0);
+			mergedBody.clusterIndex = 0;
+			mergedBody.dead      = false;
+
+			addtobodies.push_back(std::make_unique<Body>(mergedBody));
+
+			std::vector<Body> clusterSnapshot;
+			LOG("Collisions (Spatial Hash)\n-----------")
+			{
+				LOG("Cluster " << i + 1 << "\n-------------")
+				for (size_t j = 0; j < colClusters[i].size(); j++) {
+					colClusters[i][j]->GetVal();
+					clusterSnapshot.push_back(*colClusters[i][j]);
+				}
+			}
+			tempClusters.push_back(clusterSnapshot);
+		}
+
+		// Append new merged bodies
+		for (auto& nb : addtobodies) {
+			bodies.push_back(std::move(nb));
+		}
+
+		// 5. MEMORY CLEANUP: Erase dead bodies
+		std::vector<std::unique_ptr<Body>> deadBodies;
+		deadBodies.reserve(bodies.size());
+
+		auto it = bodies.begin();
+		while (it != bodies.end()) {
+			if ((*it)->dead) {
+				deadBodies.push_back(std::move(*it));
+				it = bodies.erase(it);
+			} else {
+				++it;
+			}
+		}
+
+		colClusters.clear();
+		return { std::move(deadBodies), std::move(tempClusters) };
+	}
+
 	void resolve(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		int s = bodies.size();
@@ -835,7 +1586,59 @@ namespace physics {
 	    }
 	}
 
+	// ── Drop-in FMM replacement for computeAccel / computeAccelBH (RK45) ────────
+	void computeAccelFMM(const std::vector<vectorP>& pos,
+						 std::vector<vectorP>& a_out,
+						 const std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		const int s = (int)bodies.size();
+		std::vector<double> masses(s);
+		for (int i = 0; i < s; ++i) masses[i] = bodies[i]->m_Mass;
 
+		fmm::run_fmm(pos, masses, nullptr, a_out, nullptr, bodies);
+	}
+
+	// ── Drop-in FMM replacement for resolve / resolveBarnesHut (Verlet & Yoshida) ──
+	void resolveFMM(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		const int s = (int)bodies.size();
+		std::vector<vectorP> pos(s), a(s);
+		std::vector<double> masses(s);
+		for (int i = 0; i < s; ++i) {
+			pos[i] = bodies[i]->m_posVec;
+			masses[i] = bodies[i]->m_Mass;
+		}
+
+		fmm::run_fmm(pos, masses, nullptr, a, nullptr, bodies);
+
+		for (int i = 0; i < s; ++i) {
+			if (!bodies[i]->movability) continue;
+			bodies[i]->m_accVec = a[i];
+			bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
+		}
+	}
+
+	// ── Drop-in FMM replacement for resolveWithJerk / resolveWithJerkBH (Hermite) ──
+	void resolveWithJerkFMM(std::vector<std::unique_ptr<Body>>& bodies)
+	{
+		const int s = (int)bodies.size();
+		std::vector<vectorP> pos(s), vel(s), a(s), j(s);
+		std::vector<double> masses(s);
+		for (int i = 0; i < s; ++i) {
+			pos[i] = bodies[i]->m_posVec;
+			vel[i] = bodies[i]->m_velVec;
+			masses[i] = bodies[i]->m_Mass;
+		}
+
+		fmm::run_fmm(pos, masses, &vel, a, &j, bodies);
+
+		for (int i = 0; i < s; ++i) {
+			if (!bodies[i]->movability) continue;
+			bodies[i]->m_accVec  = a[i];
+			bodies[i]->m_jerkVec = j[i];
+			bodies[i]->m_forVec  = bodies[i]->m_accVec * bodies[i]->m_Mass;
+		}
+	}
 
 	void moveVerlet(std::vector<std::unique_ptr<Body>>& bodies)
 	{
@@ -1013,7 +1816,8 @@ namespace physics {
         // k1 depends only on (x0,v0), not on h — compute once outside the retry loop
         for (int i = 0; i < s; i++) kx[0][i] = v0[i];
         //computeAccel(x0, kv[0], bodies);
-		computeAccelBH(x0, kv[0], bodies);
+		computeAccelFMM(x0, kv[0], bodies);
+		//computeAccelBH(x0, kv[0], bodies);
 
         double h = dt;
 
@@ -1034,7 +1838,9 @@ namespace physics {
                     kx[st][i] = vs[i];  // dx/dt at this stage point
                 }
                 //computeAccel(xs, as, bodies);
-                computeAccelBH(xs, as, bodies);
+                computeAccelFMM(xs, as, bodies);
+            	//computeAccelBH(x0, kv[0], bodies);
+
                 for (int i = 0; i < s; i++) kv[st][i] = as[i];  // dv/dt at this stage
             }
             // xs = x5, vs = v5, kv[6] = a(x5) after the loop above
@@ -1082,7 +1888,6 @@ namespace physics {
             h = std::max(DT_MIN, h * fac);
         }
     }
-
 }
 
 struct BodyInput
@@ -1332,64 +2137,76 @@ int main()
 			 	bodys.push_back(std::move(star));
 			 	bodys.push_back(std::move(perf));
 			 }
-			/*vectorP vector(3, 3);
-			vectorP vector2(6, 6);
-			vectorP vector4(-1, -1);
 
-			vectorP vector1(17, 17);
-			vectorP vector21(23, 17.5);
-			vectorP vector41(11, 11);
+			if (moga == 6)
+			{
+				vectorP vector1(3, 4);
+				vectorP vector2(4, 4);
+				vectorP vector4(3, 5);
+				vectorP vector5(5, 4);
+				vectorP vector6(4, 6);
+				vectorP vector7(6, -6);
 
-			vectorP vector11(10, 8);
-			vectorP vector211(1, 17.5);
-			vectorP vector411(20, 0);
+				auto perf1 = std::make_unique<Body>(10.0f, 1.0f, true, vector1);
+				auto perf2 = std::make_unique<Body>(10.0f, 1.0f, true, vector2);
+				auto perf4 = std::make_unique<Body>(10.0f, 1.0f, true, vector4);
+				auto perf5 = std::make_unique<Body>(10.0f, 1.0f, true, vector5);
+				auto perf6 = std::make_unique<Body>(10.0f, 1.0f, true, vector6);
+				auto perf7 = std::make_unique<Body>(10.0f, 1.0f, true, vector7);
 
-			vectorP vector0(3, 3);
-			vectorP vector20(6, 6);
-			vectorP vector40(-1, -1);
+				bodys.push_back(std::move(perf1));
+				bodys.push_back(std::move(perf2));
+				bodys.push_back(std::move(perf4));
+				bodys.push_back(std::move(perf5));
+				bodys.push_back(std::move(perf6));
+				bodys.push_back(std::move(perf7));
+			}
 
-			auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector);
-			auto perf = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector2,vector20);
-			auto nig = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector4,vector40);
+			if ( moga == 7)
+			{
+				vectorP vector(3, 3);
+				vectorP vector2(6, 6);
+				vectorP vector4(-1, -1);
+
+				vectorP vector1(17, 17);
+				vectorP vector21(23, 17.5);
+				vectorP vector41(11, 11);
+
+				vectorP vector11(10, 8);
+				vectorP vector211(1, 17.5);
+				vectorP vector411(20, 0);
+
+				vectorP vector0(3, 3);
+				vectorP vector20(6, 6);
+				vectorP vector40(-1, -1);
+
+				auto star = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector);
+				auto perf = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector2,vector20);
+				auto nig = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector4,vector40);
 
 
-			auto star1 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector1);
-			auto perf1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector21,vector0);
-			auto nig1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector41, vector40);
-			
-			auto star11 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector11, vector40);
-			auto perf11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector211);
-			auto nig11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector411); */
+				auto star1 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector1);
+				auto perf1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector21,vector0);
+				auto nig1 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector41, vector40);
 
-			/*bodys.push_back(std::move(star));
-			bodys.push_back(std::move(perf));
-			bodys.push_back(std::move(nig));
+				auto star11 = std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector11, vector40);
+				auto perf11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector211);
+				auto nig11 = std::make_unique<Body>(1000000000000.0f, 0.2f, true, vector411);
 
-			bodys.push_back(std::move(star1));
-			bodys.push_back(std::move(perf1));
-			bodys.push_back(std::move(nig1));
+				bodys.push_back(std::move(star));
+				bodys.push_back(std::move(perf));
+				bodys.push_back(std::move(nig));
 
-			bodys.push_back(std::move(star11));
-			bodys.push_back(std::move(perf11));
-			bodys.push_back(std::move(nig11)); */
+				bodys.push_back(std::move(star1));
+				bodys.push_back(std::move(perf1));
+				bodys.push_back(std::move(nig1));
 
-			/*float mass = 100000000000.0f;
+				bodys.push_back(std::move(star11));
+				bodys.push_back(std::move(perf11));
+				bodys.push_back(std::move(nig11));
 
-			vectorP pos1( 0.97f,  -0.2430f);
-			vectorP pos2(-0.97f,   0.2430f);
-			vectorP pos3( 0.0f,    0.0f);
+			}
 
-			vectorP vel1( 0.4662f,   0.4323f);
-			vectorP vel2( 0.4662,    0.4323f);
-			vectorP vel3(-0.24f,  -0.8647f);
-
-			auto star11 = std::make_unique<Body>(mass, 0.1f,  true, pos1, vel1);
-			auto perf11 = std::make_unique<Body>(mass, 0.1f, true, pos2, vel2);
-			auto nig11  = std::make_unique<Body>(mass, 0.1f, true, pos3, vel3);
-
-			bodys.push_back(std::move(star11));
-			bodys.push_back(std::move(perf11));
-			bodys.push_back(std::move(nig11));*/
 
 
 			LOG("-----")
@@ -1604,8 +2421,15 @@ int main()
 						{
 							frame++;
 
+							auto ks_pairs = ks_regularization::extractCloseEncounters(bodys);
+
 							//physics::moveHermite(bodys, dt);
-							phys_time += physics::moveRK45(bodys);
+							//phys_time += physics::moveRK45(bodys);
+
+							double step_taken = physics::moveRK45(bodys);
+							phys_time += step_taken;
+
+							ks_regularization::restoreCloseEncounters(bodys, ks_pairs, step_taken);
 
 							eos(KE , PE , E , bodys);
 							Edifn = E - ogE;
@@ -1621,9 +2445,10 @@ int main()
 							LOG("Net linPdiffn : " << linPdiffn.mag());
 							LOG("Net angPdiffn : " << angPdiffn);
 
-							//bodys[1]->GetVal();
+							bodys[1]->GetVal();
 
-							auto colData = (physics::checkCol(bodys,colClusters));
+							//auto colData = (physics::checkCol(bodys,colClusters));
+							auto colData = (physics::checkColSpatialHash(bodys, colClusters));
 							auto killed = std::move(colData.deadBodies);
 							auto newClusters = std::move(colData.clusters);
 							for (auto& c : newClusters)
