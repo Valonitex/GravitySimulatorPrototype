@@ -1,0 +1,1 @@
+bash: line 2: /home/valonitex/Documents/Code/GravitySimulatorPrototype/GravitySimulatorPrototype/physics2: No such file or directory
