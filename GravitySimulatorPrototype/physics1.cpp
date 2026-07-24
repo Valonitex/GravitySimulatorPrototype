@@ -1845,6 +1845,7 @@ namespace physics {
         for (int i = 0; i < s; i++) kx[0][i] = v0[i];
         //computeAccel(x0, kv[0], bodies);
 		computeAccelBH(x0, kv[0], bodies);
+		//computeAccelFMM(x0, kv[0], bodies);
 		//computeAccelBH(x0, kv[0], bodies);
 
         double h = dt;
@@ -1867,6 +1868,7 @@ namespace physics {
                 }
                 //computeAccel(xs, as, bodies);
                 computeAccelBH(xs, as, bodies);
+                //computeAccelFMM(xs, as, bodies);
                 //computeAccelBH(xs, as, bodies);   // ← was: (x0,kv[0]) — wrong arrays!
 
                 for (int i = 0; i < s; i++) kv[st][i] = as[i];  // dv/dt at this stage
@@ -2429,7 +2431,7 @@ int main()
 			double ogKE ,ogPE ,ogE , ogangP ;
 			vectorP oglinP;
 
-			float RENDER_SCALE = 0.25f;
+			float RENDER_SCALE = 1.00f;
 
 			eos( ogKE, ogPE, ogE , bodys);
 			linearP(oglinP , bodys);

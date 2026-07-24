@@ -1760,7 +1760,8 @@ namespace physics {
 			// (Sub-step 4 is drift-only, so we stop after 3 kicks)
 			if (step < 3)
 			{
-				resolveBarnesHut(bodies); // Re-evaluate accelerations at the new positions
+				//resolveBarnesHut(bodies); // Re-evaluate accelerations at the new positions
+				resolveFMM(bodies); // Re-evaluate accelerations at the new positions
 
 				for (int i = 0; i < s; i++)
 				{
@@ -1781,7 +1782,8 @@ namespace physics {
 	void moveHermite(std::vector<std::unique_ptr<Body>>& bodies, double& dt)
 	{
 		int s = bodies.size();
-		resolveWithJerkBH(bodies);
+		//resolveWithJerkBH(bodies);
+		resolveWithJerkFMM(bodies);
 
 		std::vector<vectorP> x_old(s), v_old(s), a_old(s), j_old(s);
 		std::vector<vectorP> x_pred(s), v_pred(s);
@@ -1803,7 +1805,8 @@ namespace physics {
 			bodies[i]->m_velVec = v_pred[i];
 		}
 
-		resolveWithJerkBH(bodies);
+		//resolveWithJerkBH(bodies);
+		resolveWithJerkFMM(bodies);
 
 		// CORRECT + compute Aarseth dt
 		const double eta = 0.02;
@@ -2541,6 +2544,8 @@ int main()
 						EndDrawing();
 					}
 
+					double phys_time = 0.0f;
+
 					while (!WindowShouldClose() && !quit && !bodys.empty())
 					{
 
@@ -2561,7 +2566,7 @@ int main()
 							catch (...) { hmframe = 1; }
 						}
 
-						double phys_time = 0.0f;
+						//double phys_time = 0.0f;
 						//auto t0 = clock::now();
 
 
@@ -2583,6 +2588,8 @@ int main()
 							//physics::moveHermiteKS(bodys,dt);
 							//physics::moveYoshidaKS(bodys);
 							//physics::moveVerletKS(bodys);
+
+							//phys_time += dt;
 
 							eos(KE , PE , E , bodys);
 							Edifn = E - ogE;
