@@ -1845,8 +1845,9 @@ void moveYoshidaHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
   }
 }
 
-void moveHermiteHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
+double moveHermiteHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
                          double etaSq) {
+  double diht;
   double r2_min = 1e30;
   int n = static_cast<int>(bodies.size());
   for (int i = 0; i < n; i++) {
@@ -1859,18 +1860,20 @@ void moveHermiteHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
 
   if (r2_min < etaSq) {
     double current_dt = ::dt;
-    moveHermiteLC(bodies, current_dt);
+    diht = moveHermiteLC(bodies, current_dt);
     ::dt = current_dt;
+    return diht;
   } else {
     double current_dt = ::dt;
     moveHermite(bodies, current_dt);
     ::dt = current_dt;
+    return current_dt;
   }
 }
 
-void moveRK45HybridLC(std::vector<std::unique_ptr<Body>> &bodies,
+double moveRK45HybridLC(std::vector<std::unique_ptr<Body>> &bodies,
                       double etaSq , double tol , double dt_max) {
-  double r2_min = 1e30;
+  double r2_min = 1e30 , diht;
   int n = static_cast<int>(bodies.size());
   for (int i = 0; i < n; i++) {
     for (int j = i + 1; j < n; j++) {
@@ -1882,12 +1885,14 @@ void moveRK45HybridLC(std::vector<std::unique_ptr<Body>> &bodies,
 
   if (r2_min < etaSq) {
     double current_dt = ::dt;
-    moveRK45LC(bodies, current_dt, tol, dt_max);
+    diht = moveRK45LC(bodies, current_dt, tol, dt_max);
     ::dt = current_dt;
+    return diht;
   } else {
     double current_dt = ::dt;
     moveRK45(bodies, current_dt);
     ::dt = current_dt;
+    return current_dt;
   }
 }
 
@@ -2414,9 +2419,9 @@ int main() {
                  s < hmframe && !bodys.empty() && !WindowShouldClose(); s++) {
               frame++;
 
-              // diht = physics::moveHermiteLC(bodys, dt);
+              diht = physics::moveHermiteHybridLC(bodys, 150);
               //diht = physics::moveRK45LC(bodys, dt, 0.00001, 1 / 30.0);
-              physics::moveRK45HybridLC(bodys, dt, 0.00001, 1 / 30.0);
+              //diht = physics::moveRK45HybridLC(bodys, 150, 0.00001, 1 / 30.0);
               phys_time += diht;
 
               eos(KE, PE, E, bodys);
