@@ -6,6 +6,7 @@
 #include "EndBrace.h"
 
 double dt = (1.0f / 120.0f);
+double eps = 0.0f;
 
 class Body;
 class vectorP;
@@ -238,7 +239,7 @@ namespace physics {
 	void pull(Body& a, Body& b)
 	{
 		vectorP disp = physics::displacement(a, b);
-		double eps = 0.1;
+		//double eps = 0.1;
 
 		double distSq = disp.magSq() + eps * eps;
 		double invdist =  1.0/sqrt(distSq);
@@ -512,7 +513,7 @@ namespace physics {
 	void resolveWithJerk(std::vector<std::unique_ptr<Body>>& bodies)
 	{
 		int s = bodies.size();
-		double eps = 0.1; // Softening factor to match your pull() function
+		//double eps = 0.1; // Softening factor to match your pull() function
 
 		// Reset accelerations and jerks
 		for (int i = 0; i < s; i++) {
@@ -633,7 +634,7 @@ namespace physics {
 		std::vector<vectorP>& out_acc)
 	{
 		const int    n   = static_cast<int>(bodies.size());
-		const double eps = 0.1;   // same softening ε as pull()
+		//const double eps = 0.1;   // same softening ε as pull()
 
 		for (int i = 0; i < n; i++)
 			out_acc[i] = vectorP(0.0, 0.0);
@@ -1130,7 +1131,9 @@ static ChainState lc_buildChain(const std::vector<std::unique_ptr<Body>>& bodies
 		vectorP X    = vSub(bodies[sj]->m_posVec, bodies[si]->m_posVec);
 		vectorP Xdot = vSub(bodies[sj]->m_velVec, bodies[si]->m_velVec);
 		double  r    = vMag(X);
-		double  Mpair = bodies[si]->m_Mass + bodies[sj]->m_Mass;
+		double  Mpair = 0.0;
+		if (bodies[si]->movability) Mpair += bodies[sj]->m_Mass;
+		if (bodies[sj]->movability) Mpair += bodies[si]->m_Mass;
 
 		chain.links[k].u = lc_cartToU(X);
 		chain.links[k].w = lc_velToW(chain.links[k].u, Xdot);
@@ -1156,35 +1159,51 @@ static void lc_chainToPositions(const ChainState& chain,
 	int N = chain.N;
 	pos.resize(N);
 	if (N == 0) return;
-	if (N == 1) { pos[chain.sigma[0]] = chain.R; return; }
+
+	int pinned_idx = -1;
+	for (int i = 0; i < N; i++) {
+		if (!bodies[chain.sigma[i]]->movability) {
+			pinned_idx = i;
+			break;
+		}
+	}
+
+	if (N == 1) { 
+		pos[chain.sigma[0]] = (pinned_idx != -1) ? bodies[chain.sigma[0]]->m_posVec : chain.R; 
+		return; 
+	}
 
 	int nLinks = N - 1;
-
-	// Reconstruct chain vectors from LC
 	std::vector<vectorP> X(nLinks);
 	for (int k = 0; k < nLinks; k++)
 		X[k] = lc_uToCart(chain.links[k].u);
 
-	// Total mass
-	double M = 0.0;
-	for (int i = 0; i < N; i++) M += bodies[chain.sigma[i]]->m_Mass;
+	if (pinned_idx == -1) {
+		double M = 0.0;
+		for (int i = 0; i < N; i++) M += bodies[chain.sigma[i]]->m_Mass;
 
-	// First body: r_{σ(0)} = R − (1/M) Σ_k tailMass_k · X_k
-	vectorP offset(0.0, 0.0);
-	for (int k = 0; k < nLinks; k++) {
-		double tailMass = 0.0;
-		for (int j = k + 1; j < N; j++)
-			tailMass += bodies[chain.sigma[j]]->m_Mass;
-		offset = vAdd(offset, vScale(X[k], tailMass));
-	}
-	vectorP r0 = vSub(chain.R, vScale(offset, 1.0 / M));
-	pos[chain.sigma[0]] = r0;
+		vectorP offset(0.0, 0.0);
+		for (int k = 0; k < nLinks; k++) {
+			double tailMass = 0.0;
+			for (int j = k + 1; j < N; j++)
+				tailMass += bodies[chain.sigma[j]]->m_Mass;
+			offset = vAdd(offset, vScale(X[k], tailMass));
+		}
+		pos[chain.sigma[0]] = vSub(chain.R, vScale(offset, 1.0 / M));
 
-	// Remaining bodies: cumulative chain vector sum
-	vectorP cumX = r0;
-	for (int k = 0; k < nLinks; k++) {
-		cumX = vAdd(cumX, X[k]);
-		pos[chain.sigma[k + 1]] = cumX;
+		vectorP cumX = pos[chain.sigma[0]];
+		for (int k = 0; k < nLinks; k++) {
+			cumX = vAdd(cumX, X[k]);
+			pos[chain.sigma[k + 1]] = cumX;
+		}
+	} else {
+		pos[chain.sigma[pinned_idx]] = bodies[chain.sigma[pinned_idx]]->m_posVec;
+		for (int i = pinned_idx - 1; i >= 0; i--) {
+			pos[chain.sigma[i]] = vSub(pos[chain.sigma[i+1]], X[i]);
+		}
+		for (int i = pinned_idx; i < nLinks; i++) {
+			pos[chain.sigma[i+1]] = vAdd(pos[chain.sigma[i]], X[i]);
+		}
 	}
 }
 
@@ -1197,32 +1216,51 @@ static void lc_chainToVelocities(const ChainState& chain,
 	int N = chain.N;
 	vel.resize(N);
 	if (N == 0) return;
-	if (N == 1) { vel[chain.sigma[0]] = chain.V_cm; return; }
+
+	int pinned_idx = -1;
+	for (int i = 0; i < N; i++) {
+		if (!bodies[chain.sigma[i]]->movability) {
+			pinned_idx = i;
+			break;
+		}
+	}
+
+	if (N == 1) { 
+		vel[chain.sigma[0]] = (pinned_idx != -1) ? bodies[chain.sigma[0]]->m_velVec : chain.V_cm; 
+		return; 
+	}
 
 	int nLinks = N - 1;
-
-	// Reconstruct chain velocities from LC
 	std::vector<vectorP> Xdot(nLinks);
 	for (int k = 0; k < nLinks; k++)
 		Xdot[k] = lc_wToVel(chain.links[k].u, chain.links[k].w);
 
-	double M = 0.0;
-	for (int i = 0; i < N; i++) M += bodies[chain.sigma[i]]->m_Mass;
+	if (pinned_idx == -1) {
+		double M = 0.0;
+		for (int i = 0; i < N; i++) M += bodies[chain.sigma[i]]->m_Mass;
 
-	vectorP velOffset(0.0, 0.0);
-	for (int k = 0; k < nLinks; k++) {
-		double tailMass = 0.0;
-		for (int j = k + 1; j < N; j++)
-			tailMass += bodies[chain.sigma[j]]->m_Mass;
-		velOffset = vAdd(velOffset, vScale(Xdot[k], tailMass));
-	}
-	vectorP v0 = vSub(chain.V_cm, vScale(velOffset, 1.0 / M));
-	vel[chain.sigma[0]] = v0;
+		vectorP velOffset(0.0, 0.0);
+		for (int k = 0; k < nLinks; k++) {
+			double tailMass = 0.0;
+			for (int j = k + 1; j < N; j++)
+				tailMass += bodies[chain.sigma[j]]->m_Mass;
+			velOffset = vAdd(velOffset, vScale(Xdot[k], tailMass));
+		}
+		vel[chain.sigma[0]] = vSub(chain.V_cm, vScale(velOffset, 1.0 / M));
 
-	vectorP cumV = v0;
-	for (int k = 0; k < nLinks; k++) {
-		cumV = vAdd(cumV, Xdot[k]);
-		vel[chain.sigma[k + 1]] = cumV;
+		vectorP cumV = vel[chain.sigma[0]];
+		for (int k = 0; k < nLinks; k++) {
+			cumV = vAdd(cumV, Xdot[k]);
+			vel[chain.sigma[k + 1]] = cumV;
+		}
+	} else {
+		vel[chain.sigma[pinned_idx]] = vectorP(0.0, 0.0);
+		for (int i = pinned_idx - 1; i >= 0; i--) {
+			vel[chain.sigma[i]] = vSub(vel[chain.sigma[i+1]], Xdot[i]);
+		}
+		for (int i = pinned_idx; i < nLinks; i++) {
+			vel[chain.sigma[i+1]] = vAdd(vel[chain.sigma[i]], Xdot[i]);
+		}
 	}
 }
 
@@ -1278,35 +1316,37 @@ static vectorP lc_perturbation(const ChainState& chain,
                                const std::vector<std::unique_ptr<Body>>& bodies,
                                const std::vector<vectorP>& positions,
                                int k) {
-	const double eps = 0.1;
 	int si = chain.sigma[k];
 	int sj = chain.sigma[k + 1];
 	int N  = chain.N;
 
-	vectorP P(0.0, 0.0);
-
-	for (int b = 0; b < N; b++) {
-		if (b == si || b == sj) continue;
-
-		double mj = bodies[b]->m_Mass;
-
-		// Acceleration of σ(k+1) due to body b
-		vectorP r_b_sj = vSub(positions[b], positions[sj]);
-		double d2_sj = vMagSq(r_b_sj) + eps * eps;
-		double d1_sj = std::sqrt(d2_sj);
-		double d3_sj = d2_sj * d1_sj;
-
-		// Acceleration of σ(k) due to body b
-		vectorP r_b_si = vSub(positions[b], positions[si]);
-		double d2_si = vMagSq(r_b_si) + eps * eps;
-		double d1_si = std::sqrt(d2_si);
-		double d3_si = d2_si * d1_si;
-
-		// P_k += G·m_b·[ (r_b − r_sj)/d³_sj − (r_b − r_si)/d³_si ]
-		P = vAdd(P, vSub(vScale(r_b_sj, G * mj / d3_sj),
-		                 vScale(r_b_si, G * mj / d3_si)));
+	vectorP a_si_pert(0.0, 0.0);
+	if (bodies[si]->movability) {
+		for (int b = 0; b < N; b++) {
+			if (b == si || b == sj) continue;
+			double mb = bodies[b]->m_Mass;
+			vectorP r_b_si = vSub(positions[b], positions[si]);
+			double d2_si = vMagSq(r_b_si);
+			if (d2_si < 1e-30) continue;
+			double d3_si = d2_si * std::sqrt(d2_si);
+			a_si_pert = vAdd(a_si_pert, vScale(r_b_si, G * mb / d3_si));
+		}
 	}
-	return P;
+
+	vectorP a_sj_pert(0.0, 0.0);
+	if (bodies[sj]->movability) {
+		for (int b = 0; b < N; b++) {
+			if (b == si || b == sj) continue;
+			double mb = bodies[b]->m_Mass;
+			vectorP r_b_sj = vSub(positions[b], positions[sj]);
+			double d2_sj = vMagSq(r_b_sj);
+			if (d2_sj < 1e-30) continue;
+			double d3_sj = d2_sj * std::sqrt(d2_sj);
+			a_sj_pert = vAdd(a_sj_pert, vScale(r_b_sj, G * mb / d3_sj));
+		}
+	}
+
+	return vSub(a_sj_pert, a_si_pert);
 }
 
 // ── Full RHS evaluation ──────────────────────────────────────────────────
@@ -1468,7 +1508,6 @@ void moveVerletLC(std::vector<std::unique_ptr<Body>>& bodies, double& dt) {
 	lc_kick(chain, bodies, ds * 0.5);
 
 	lc_chainToCartesian(chain, bodies);
-	dt = chain.t_phys;
 }
 
 // ── moveYoshidaLC ────────────────────────────────────────────────────────
@@ -1501,7 +1540,6 @@ void moveYoshidaLC(std::vector<std::unique_ptr<Body>>& bodies, double& dt) {
 	}
 
 	lc_chainToCartesian(chain, bodies);
-	dt = chain.t_phys;
 }
 
 // ── moveHermiteLC ────────────────────────────────────────────────────────
@@ -1599,9 +1637,10 @@ double moveHermiteLC(std::vector<std::unique_ptr<Body>>& bodies, double& dt) {
 	for (int k = 0; k < nLinks; k++) {
 		double a0 = vMag(f0.dw[k]);
 		double a1 = vMag(j0.dw[k]);
-		vectorP snap_k = vScale(vSub(j0.dw[k], j1.dw[k]), 1.0 / ds);
+		vectorP snap_k = vScale(vSub(vScale(vSub(f0.dw[k], f1.dw[k]), -6.0), vScale(vAdd(vScale(j0.dw[k], 4.0), vScale(j1.dw[k], 2.0)), ds)), 1.0 / (ds * ds));
+		vectorP crackle_k = vScale(vAdd(vScale(vSub(f0.dw[k], f1.dw[k]), 12.0), vScale(vAdd(j0.dw[k], j1.dw[k]), 6.0 * ds)), 1.0 / (ds * ds * ds));
 		double a2 = vMag(snap_k);
-		double a3 = (a2 > 1e-30 && ds > 1e-30) ? a2 / ds : 0.0;
+		double a3 = vMag(crackle_k);
 
 		double denom = a1 * a3 + a2 * a2;
 		if (denom > 1e-30) {
@@ -2799,7 +2838,7 @@ void eos(double& KE , double& PE , double& E , std::vector<std::unique_ptr<Body>
 		KE += 0.5f * bodys[i]->m_Mass * bodys[i]->m_velVec.magSq();
 	}
 
-	double eps = 0.1;
+	//double eps = 0.1;
 
 	if (bodys.size() > 1)
 	{
