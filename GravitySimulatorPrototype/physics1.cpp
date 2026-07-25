@@ -894,6 +894,911 @@ namespace physics {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MIKKOLA CHAIN REGULARIZATION WITH LEVI-CIVITA TRANSFORMATIONS
+// ─────────────────────────────────────────────────────────────────────────
+// Implements Algorithmic Chain Regularization (Mikkola & Aarseth 1993/1998)
+// for 2D gravitational N-body simulation.
+//
+// DISCLOSURES: Zero modifications to existing code. This entire block is
+// appended by re-opening namespace physics.
+//
+// Chain ordering places the closest pairs adjacent. Each chain link is
+// LC-transformed (z = u²) to remove the 1/r gravitational singularity.
+// A global Sundman time transformation  dt/ds = Ω = (Σ 1/r_k)⁻¹
+// ensures all EOM terms remain bounded as any chain distance → 0.
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace physics {
+
+// ── Const-safe arithmetic helpers ────────────────────────────────────────
+// vectorP's operator+ and operator* lack const qualifiers on *this,
+// preventing their use on const/temporary operands. These free functions
+// provide const-correct alternatives used throughout the LC code.
+
+static inline vectorP vAdd(const vectorP& a, const vectorP& b) {
+	return vectorP(a.icap + b.icap, a.jcap + b.jcap);
+}
+static inline vectorP vSub(const vectorP& a, const vectorP& b) {
+	return vectorP(a.icap - b.icap, a.jcap - b.jcap);
+}
+static inline vectorP vScale(const vectorP& a, double s) {
+	return vectorP(a.icap * s, a.jcap * s);
+}
+static inline double vDot(const vectorP& a, const vectorP& b) {
+	return a.icap * b.icap + a.jcap * b.jcap;
+}
+static inline double vMagSq(const vectorP& a) {
+	return a.icap * a.icap + a.jcap * a.jcap;
+}
+static inline double vMag(const vectorP& a) {
+	return std::sqrt(vMagSq(a));
+}
+
+// ── Data structures ──────────────────────────────────────────────────────
+
+// Per-link LC state for one chain bond
+struct LCLink {
+	vectorP u;       // LC coordinates (u₁, u₂)
+	vectorP w;       // LC fictitious velocity  du/dτ_k
+	double  h;       // Binding energy of this chain pair
+};
+
+// Full chain state for N bodies
+struct ChainState {
+	std::vector<int>    sigma;   // Chain permutation: sigma[i] = body index
+	std::vector<LCLink> links;   // N-1 chain links
+	vectorP             R;       // Center-of-mass position
+	vectorP             V_cm;    // Center-of-mass velocity
+	double              t_phys;  // Accumulated physical time this step
+	double              Omega;   // Current time-transformation factor
+	int                 N;       // Number of bodies
+};
+
+// Derivatives of the full chain state (RHS output)
+struct ChainDerivs {
+	std::vector<vectorP> du;     // du_k/ds for each link
+	std::vector<vectorP> dw;     // dw_k/ds for each link
+	std::vector<double>  dh;     // dh_k/ds for each link
+	vectorP              dR;     // dR/ds
+	double               dt_ds;  // dt/ds = Ω
+};
+
+// ── LC matrix operations ─────────────────────────────────────────────────
+// The LC matrix L(u) represents complex multiplication by u.
+// L(u)^T represents complex multiplication by conj(u).
+
+// L(u) * v  =  u · v  (complex product)
+static inline vectorP lc_L_mul(const vectorP& u, const vectorP& v) {
+	return vectorP(u.icap * v.icap - u.jcap * v.jcap,
+	               u.jcap * v.icap + u.icap * v.jcap);
+}
+
+// L(u)^T * v  =  conj(u) · v  (complex conjugate product)
+static inline vectorP lc_LT_mul(const vectorP& u, const vectorP& v) {
+	return vectorP( u.icap * v.icap + u.jcap * v.jcap,
+	               -u.jcap * v.icap + u.icap * v.jcap);
+}
+
+// ── Coordinate transforms ────────────────────────────────────────────────
+
+// Cartesian → LC coordinate  (inverse of the squaring map X = u²)
+//   u₁ = √((r+x)/2),  u₂ = y / (2u₁)
+// with alternate branch when x ≈ -r to avoid cancellation.
+static vectorP lc_cartToU(const vectorP& X) {
+	double r = vMag(X);
+	if (r < 1e-30) return vectorP(0.0, 0.0);
+
+	double u1, u2;
+	if (r + X.icap > 1e-15 * r) {
+		u1 = std::sqrt((r + X.icap) / 2.0);
+		u2 = X.jcap / (2.0 * u1);
+	} else {
+		u2 = std::sqrt((r - X.icap) / 2.0);
+		u1 = X.jcap / (2.0 * u2);
+	}
+	return vectorP(u1, u2);
+}
+
+// LC → Cartesian position  (squaring map: X = L(u)·u = u²)
+static inline vectorP lc_uToCart(const vectorP& u) {
+	return vectorP(u.icap * u.icap - u.jcap * u.jcap,
+	               2.0 * u.icap * u.jcap);
+}
+
+// Cartesian velocity → LC fictitious velocity
+//   w = (1/2) L(u)^T · Ẋ
+static inline vectorP lc_velToW(const vectorP& u, const vectorP& Xdot) {
+	return vScale(lc_LT_mul(u, Xdot), 0.5);
+}
+
+// LC fictitious velocity → Cartesian velocity
+//   Ẋ = 2 L(u) w / |u|²
+static inline vectorP lc_wToVel(const vectorP& u, const vectorP& w) {
+	double uSq = vMagSq(u);
+	if (uSq < 1e-30) return vectorP(0.0, 0.0);
+	return vScale(lc_L_mul(u, w), 2.0 / uSq);
+}
+
+// Binding energy  h = |Ẋ|²/2 − G·M_pair / |X|
+static inline double lc_bindingEnergy(const vectorP& Xdot, double r, double Mpair) {
+	return 0.5 * vMagSq(Xdot) - G * Mpair / std::max(r, 1e-30);
+}
+
+// Compute Ω = (Σ 1/r_k)⁻¹   where r_k = |u_k|²
+// Bounded: Ω/r_k ≤ 1 for all k, ensuring regularized EOM stay finite.
+static double lc_computeOmega(const std::vector<LCLink>& links) {
+	if (links.empty()) return 1.0;
+	double S = 0.0;
+	for (const auto& lk : links) {
+		double rk = vMagSq(lk.u);
+		S += 1.0 / std::max(rk, 1e-30);
+	}
+	return 1.0 / std::max(S, 1e-30);
+}
+
+// ── Chain construction (nearest-neighbor) ────────────────────────────────
+// Builds a topological chain ordering where the closest pairs in the
+// system are adjacent links. The chain is constructed by:
+//   1. Seed with the global closest pair
+//   2. Greedily extend from both ends with the nearest unchained body
+
+static ChainState lc_buildChain(const std::vector<std::unique_ptr<Body>>& bodies) {
+	ChainState chain;
+	chain.N = static_cast<int>(bodies.size());
+	int N = chain.N;
+
+	if (N == 0) {
+		chain.R = vectorP(0, 0);
+		chain.V_cm = vectorP(0, 0);
+		chain.t_phys = 0.0;
+		chain.Omega = 1.0;
+		return chain;
+	}
+
+	// ── Center of mass ──────────────────────────────────────────────
+	double M = 0.0;
+	vectorP wPos(0, 0), wVel(0, 0);
+	for (int i = 0; i < N; i++) {
+		M += bodies[i]->m_Mass;
+		wPos = vAdd(wPos, vScale(bodies[i]->m_posVec, bodies[i]->m_Mass));
+		wVel = vAdd(wVel, vScale(bodies[i]->m_velVec, bodies[i]->m_Mass));
+	}
+	chain.R = vScale(wPos, 1.0 / M);
+	chain.V_cm = vScale(wVel, 1.0 / M);
+
+	if (N == 1) {
+		chain.sigma.push_back(0);
+		chain.t_phys = 0.0;
+		chain.Omega = 1.0;
+		return chain;
+	}
+
+	// ── Find closest pair for chain seed ─────────────────────────────
+	double minDistSq = 1e30;
+	int bestI = 0, bestJ = 1;
+	for (int i = 0; i < N; i++) {
+		for (int j = i + 1; j < N; j++) {
+			double d2 = vMagSq(vSub(bodies[i]->m_posVec, bodies[j]->m_posVec));
+			if (d2 < minDistSq) {
+				minDistSq = d2;
+				bestI = i;
+				bestJ = j;
+			}
+		}
+	}
+
+	// ── Grow chain from both ends via nearest-neighbor ───────────────
+	chain.sigma.reserve(N);
+	chain.sigma.push_back(bestI);
+	chain.sigma.push_back(bestJ);
+	std::vector<bool> chained(N, false);
+	chained[bestI] = true;
+	chained[bestJ] = true;
+
+	while (static_cast<int>(chain.sigma.size()) < N) {
+		int leftEnd  = chain.sigma.front();
+		int rightEnd = chain.sigma.back();
+
+		double bestLeftDist = 1e30, bestRightDist = 1e30;
+		int bestLeftBody = -1, bestRightBody = -1;
+
+		for (int i = 0; i < N; i++) {
+			if (chained[i]) continue;
+			double dL = vMagSq(vSub(bodies[i]->m_posVec, bodies[leftEnd]->m_posVec));
+			double dR = vMagSq(vSub(bodies[i]->m_posVec, bodies[rightEnd]->m_posVec));
+			if (dL < bestLeftDist)  { bestLeftDist = dL;  bestLeftBody = i; }
+			if (dR < bestRightDist) { bestRightDist = dR; bestRightBody = i; }
+		}
+
+		if (bestLeftDist <= bestRightDist && bestLeftBody >= 0) {
+			chain.sigma.insert(chain.sigma.begin(), bestLeftBody);
+			chained[bestLeftBody] = true;
+		} else if (bestRightBody >= 0) {
+			chain.sigma.push_back(bestRightBody);
+			chained[bestRightBody] = true;
+		}
+	}
+
+	// ── Build LC links from chain vectors ────────────────────────────
+	int nLinks = N - 1;
+	chain.links.resize(nLinks);
+	for (int k = 0; k < nLinks; k++) {
+		int si = chain.sigma[k];
+		int sj = chain.sigma[k + 1];
+
+		vectorP X    = vSub(bodies[sj]->m_posVec, bodies[si]->m_posVec);
+		vectorP Xdot = vSub(bodies[sj]->m_velVec, bodies[si]->m_velVec);
+		double  r    = vMag(X);
+		double  Mpair = bodies[si]->m_Mass + bodies[sj]->m_Mass;
+
+		chain.links[k].u = lc_cartToU(X);
+		chain.links[k].w = lc_velToW(chain.links[k].u, Xdot);
+		chain.links[k].h = lc_bindingEnergy(Xdot, r, Mpair);
+	}
+
+	chain.t_phys = 0.0;
+	chain.Omega  = lc_computeOmega(chain.links);
+
+	return chain;
+}
+
+// ── Position recovery from chain state ──────────────────────────────────
+// Reconstructs absolute Cartesian positions from the LC chain state
+// and center-of-mass.   pos[] is indexed by BODY INDEX (not chain index).
+//
+//   r_{σ(0)} = R − (1/M) Σ_k (tail-mass_k · X_k)
+//   r_{σ(i)} = r_{σ(0)} + Σ_{j<i} X_j
+
+static void lc_chainToPositions(const ChainState& chain,
+                                const std::vector<std::unique_ptr<Body>>& bodies,
+                                std::vector<vectorP>& pos) {
+	int N = chain.N;
+	pos.resize(N);
+	if (N == 0) return;
+	if (N == 1) { pos[chain.sigma[0]] = chain.R; return; }
+
+	int nLinks = N - 1;
+
+	// Reconstruct chain vectors from LC
+	std::vector<vectorP> X(nLinks);
+	for (int k = 0; k < nLinks; k++)
+		X[k] = lc_uToCart(chain.links[k].u);
+
+	// Total mass
+	double M = 0.0;
+	for (int i = 0; i < N; i++) M += bodies[chain.sigma[i]]->m_Mass;
+
+	// First body: r_{σ(0)} = R − (1/M) Σ_k tailMass_k · X_k
+	vectorP offset(0.0, 0.0);
+	for (int k = 0; k < nLinks; k++) {
+		double tailMass = 0.0;
+		for (int j = k + 1; j < N; j++)
+			tailMass += bodies[chain.sigma[j]]->m_Mass;
+		offset = vAdd(offset, vScale(X[k], tailMass));
+	}
+	vectorP r0 = vSub(chain.R, vScale(offset, 1.0 / M));
+	pos[chain.sigma[0]] = r0;
+
+	// Remaining bodies: cumulative chain vector sum
+	vectorP cumX = r0;
+	for (int k = 0; k < nLinks; k++) {
+		cumX = vAdd(cumX, X[k]);
+		pos[chain.sigma[k + 1]] = cumX;
+	}
+}
+
+// ── Velocity recovery from chain state ──────────────────────────────────
+// Same structure as position recovery, using  Ẋ_k = 2 L(u_k) w_k / |u_k|²
+
+static void lc_chainToVelocities(const ChainState& chain,
+                                 const std::vector<std::unique_ptr<Body>>& bodies,
+                                 std::vector<vectorP>& vel) {
+	int N = chain.N;
+	vel.resize(N);
+	if (N == 0) return;
+	if (N == 1) { vel[chain.sigma[0]] = chain.V_cm; return; }
+
+	int nLinks = N - 1;
+
+	// Reconstruct chain velocities from LC
+	std::vector<vectorP> Xdot(nLinks);
+	for (int k = 0; k < nLinks; k++)
+		Xdot[k] = lc_wToVel(chain.links[k].u, chain.links[k].w);
+
+	double M = 0.0;
+	for (int i = 0; i < N; i++) M += bodies[chain.sigma[i]]->m_Mass;
+
+	vectorP velOffset(0.0, 0.0);
+	for (int k = 0; k < nLinks; k++) {
+		double tailMass = 0.0;
+		for (int j = k + 1; j < N; j++)
+			tailMass += bodies[chain.sigma[j]]->m_Mass;
+		velOffset = vAdd(velOffset, vScale(Xdot[k], tailMass));
+	}
+	vectorP v0 = vSub(chain.V_cm, vScale(velOffset, 1.0 / M));
+	vel[chain.sigma[0]] = v0;
+
+	vectorP cumV = v0;
+	for (int k = 0; k < nLinks; k++) {
+		cumV = vAdd(cumV, Xdot[k]);
+		vel[chain.sigma[k + 1]] = cumV;
+	}
+}
+
+// ── Back-transform: write chain state → Body objects ────────────────────
+// Recovers Cartesian pos/vel from the chain, writes to Body instances,
+// respects movability (pinned bodies keep original pos/vel), and
+// re-syncs m_accVec / m_forVec via resolve().
+
+static void lc_chainToCartesian(const ChainState& chain,
+                                std::vector<std::unique_ptr<Body>>& bodies) {
+	int N = chain.N;
+	if (N == 0) return;
+
+	// Save originals for pinned bodies
+	std::vector<vectorP> origPos(N), origVel(N);
+	for (int i = 0; i < N; i++) {
+		int bi = chain.sigma[i];
+		origPos[i] = bodies[bi]->m_posVec;
+		origVel[i] = bodies[bi]->m_velVec;
+	}
+
+	// Recover positions and velocities from chain
+	std::vector<vectorP> pos, vel;
+	lc_chainToPositions(chain, bodies, pos);
+	lc_chainToVelocities(chain, bodies, vel);
+
+	// Write back, respecting movability
+	for (int i = 0; i < N; i++) {
+		int bi = chain.sigma[i];
+		if (bodies[bi]->movability) {
+			bodies[bi]->m_posVec = pos[bi];
+			bodies[bi]->m_velVec = vel[bi];
+		} else {
+			bodies[bi]->m_posVec = origPos[i];
+			bodies[bi]->m_velVec = origVel[i];
+		}
+	}
+
+	// Re-sync forces/accelerations: clear accumulators then resolve
+	for (auto& b : bodies)
+		b->m_forRes = vectorP(0.0, 0.0);
+	resolve(bodies);
+}
+
+// ── Perturbation vector P_k ─────────────────────────────────────────────
+// Computes the non-chain-pair acceleration difference acting on link k:
+//   P_k = Σ_{j ∉ {σ(k),σ(k+1)}} G·m_j·[ (r_j−r_{σ(k+1)})/d³ − (r_j−r_{σ(k)})/d³ ]
+//
+// This formula never evaluates the singular chain-pair force 1/|X_k|³.
+// Non-chain interactions use softening ε = 0.1 for safety.
+
+static vectorP lc_perturbation(const ChainState& chain,
+                               const std::vector<std::unique_ptr<Body>>& bodies,
+                               const std::vector<vectorP>& positions,
+                               int k) {
+	const double eps = 0.1;
+	int si = chain.sigma[k];
+	int sj = chain.sigma[k + 1];
+	int N  = chain.N;
+
+	vectorP P(0.0, 0.0);
+
+	for (int b = 0; b < N; b++) {
+		if (b == si || b == sj) continue;
+
+		double mj = bodies[b]->m_Mass;
+
+		// Acceleration of σ(k+1) due to body b
+		vectorP r_b_sj = vSub(positions[b], positions[sj]);
+		double d2_sj = vMagSq(r_b_sj) + eps * eps;
+		double d1_sj = std::sqrt(d2_sj);
+		double d3_sj = d2_sj * d1_sj;
+
+		// Acceleration of σ(k) due to body b
+		vectorP r_b_si = vSub(positions[b], positions[si]);
+		double d2_si = vMagSq(r_b_si) + eps * eps;
+		double d1_si = std::sqrt(d2_si);
+		double d3_si = d2_si * d1_si;
+
+		// P_k += G·m_b·[ (r_b − r_sj)/d³_sj − (r_b − r_si)/d³_si ]
+		P = vAdd(P, vSub(vScale(r_b_sj, G * mj / d3_sj),
+		                 vScale(r_b_si, G * mj / d3_si)));
+	}
+	return P;
+}
+
+// ── Full RHS evaluation ──────────────────────────────────────────────────
+// Computes all derivatives of the chain state in global fictitious time s:
+//   du_k/ds = α_k · w_k
+//   dw_k/ds = α_k · [ (h_k/2)·u_k + (r_k/2)·Lᵀ·P_k ]
+//   dh_k/ds = 2·α_k · wᵀ · Lᵀ·P_k
+//   dR/ds   = Ω · V_cm
+//   dt/ds   = Ω
+// where α_k = Ω/|u_k|² ≤ 1 (bounded by construction of Ω).
+
+static void lc_chainRHS(ChainState& chain,
+                        const std::vector<std::unique_ptr<Body>>& bodies,
+                        ChainDerivs& derivs) {
+	int nLinks = static_cast<int>(chain.links.size());
+	derivs.du.resize(nLinks);
+	derivs.dw.resize(nLinks);
+	derivs.dh.resize(nLinks);
+
+	// Recompute Ω from current link positions
+	chain.Omega = lc_computeOmega(chain.links);
+	double Omega = chain.Omega;
+
+	// Recover Cartesian positions for perturbation
+	std::vector<vectorP> positions;
+	lc_chainToPositions(chain, bodies, positions);
+
+	for (int k = 0; k < nLinks; k++) {
+		double rk    = vMagSq(chain.links[k].u);          // |u_k|² = r_k
+		double alpha = Omega / std::max(rk, 1e-30);       // bounded ≤ 1
+
+		// du_k/ds = α · w_k
+		derivs.du[k] = vScale(chain.links[k].w, alpha);
+
+		// Perturbation P_k and its LC projection
+		vectorP Pk    = lc_perturbation(chain, bodies, positions, k);
+		vectorP LT_Pk = lc_LT_mul(chain.links[k].u, Pk);
+
+		// dw_k/ds = α · [ (h_k/2)·u_k + (r_k/2)·Lᵀ·P_k ]
+		vectorP term1 = vScale(chain.links[k].u, chain.links[k].h * 0.5);
+		vectorP term2 = vScale(LT_Pk, rk * 0.5);
+		derivs.dw[k]  = vScale(vAdd(term1, term2), alpha);
+
+		// dh_k/ds = 2·α · wᵀ Lᵀ P_k
+		double wdotLTP = vDot(chain.links[k].w, LT_Pk);
+		derivs.dh[k] = 2.0 * alpha * wdotLTP;
+	}
+
+	derivs.dR    = vScale(chain.V_cm, Omega);
+	derivs.dt_ds = Omega;
+}
+
+// ── State arithmetic for integrators ─────────────────────────────────────
+
+// In-place: state += derivs * h
+static void lc_axpy(ChainState& state, const ChainDerivs& f, double h) {
+	int nLinks = static_cast<int>(state.links.size());
+	for (int k = 0; k < nLinks; k++) {
+		state.links[k].u = vAdd(state.links[k].u, vScale(f.du[k], h));
+		state.links[k].w = vAdd(state.links[k].w, vScale(f.dw[k], h));
+		state.links[k].h += f.dh[k] * h;
+	}
+	state.R      = vAdd(state.R, vScale(f.dR, h));
+	state.t_phys += f.dt_ds * h;
+}
+
+// Copy: return state + derivs * h
+static ChainState lc_addScaled(const ChainState& state, const ChainDerivs& f, double h) {
+	ChainState result = state;
+	lc_axpy(result, f, h);
+	return result;
+}
+
+// ── Drift & kick building blocks (for symplectic integrators) ────────────
+
+// Drift: advance positions (u, R, t) using current velocities (w).
+// Ω is evaluated at the START of the drift, then recomputed after.
+static void lc_drift(ChainState& chain, double ds) {
+	double Omega = chain.Omega;
+	int nLinks   = static_cast<int>(chain.links.size());
+
+	for (int k = 0; k < nLinks; k++) {
+		double rk    = vMagSq(chain.links[k].u);
+		double alpha = Omega / std::max(rk, 1e-30);
+		chain.links[k].u = vAdd(chain.links[k].u,
+		                        vScale(chain.links[k].w, alpha * ds));
+	}
+
+	chain.R      = vAdd(chain.R, vScale(chain.V_cm, Omega * ds));
+	chain.t_phys += Omega * ds;
+
+	// Recompute Ω at new positions
+	chain.Omega = lc_computeOmega(chain.links);
+}
+
+// Kick: advance velocities (w, h) using forces at current positions (u).
+// Recovers Cartesian positions from chain, computes perturbations,
+// then updates w and h for each link.
+static void lc_kick(ChainState& chain,
+                    const std::vector<std::unique_ptr<Body>>& bodies,
+                    double ds) {
+	double Omega = chain.Omega;
+	int nLinks   = static_cast<int>(chain.links.size());
+
+	// Cartesian positions for perturbation
+	std::vector<vectorP> positions;
+	lc_chainToPositions(chain, bodies, positions);
+
+	for (int k = 0; k < nLinks; k++) {
+		double rk    = vMagSq(chain.links[k].u);
+		double alpha = Omega / std::max(rk, 1e-30);
+
+		vectorP Pk    = lc_perturbation(chain, bodies, positions, k);
+		vectorP LT_Pk = lc_LT_mul(chain.links[k].u, Pk);
+
+		// dw/ds = α · [(h/2)·u + (r_k/2)·Lᵀ·P]
+		vectorP dw = vScale(
+			vAdd(vScale(chain.links[k].u, chain.links[k].h * 0.5),
+			     vScale(LT_Pk, rk * 0.5)),
+			alpha);
+
+		// dh/ds = 2·α · wᵀ Lᵀ P
+		double wdotLTP = vDot(chain.links[k].w, LT_Pk);
+		double dh = 2.0 * alpha * wdotLTP;
+
+		chain.links[k].w = vAdd(chain.links[k].w, vScale(dw, ds));
+		chain.links[k].h += dh * ds;
+	}
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// INTEGRATOR WRAPPERS
+// ═════════════════════════════════════════════════════════════════════════
+
+// ── moveVerletLC ─────────────────────────────────────────────────────────
+// Velocity Verlet (KDK leapfrog) in chain-regularized LC space.
+// Kick(Δs/2) → Drift(Δs) → Kick(Δs/2)
+//
+// dt [in/out]: physical timestep. On return, holds the actual physical
+//              time advanced (may differ from input due to Sundman).
+
+void moveVerletLC(std::vector<std::unique_ptr<Body>>& bodies, double& dt) {
+	int N = static_cast<int>(bodies.size());
+	if (N == 0) return;
+	if (N == 1) {
+		if (bodies[0]->movability)
+			bodies[0]->m_posVec = vAdd(bodies[0]->m_posVec,
+			                           vScale(bodies[0]->m_velVec, dt));
+		resolve(bodies);
+		return;
+	}
+
+	ChainState chain = lc_buildChain(bodies);
+	double ds = dt / std::max(chain.Omega, 1e-30);
+
+	lc_kick(chain, bodies, ds * 0.5);
+	lc_drift(chain, ds);
+	lc_kick(chain, bodies, ds * 0.5);
+
+	lc_chainToCartesian(chain, bodies);
+	dt = chain.t_phys;
+}
+
+// ── moveYoshidaLC ────────────────────────────────────────────────────────
+// 4th-order Yoshida symplectic integrator (DKD structure) in
+// chain-regularized LC space. Uses the same coefficients as moveYoshida.
+
+void moveYoshidaLC(std::vector<std::unique_ptr<Body>>& bodies, double& dt) {
+	int N = static_cast<int>(bodies.size());
+	if (N == 0) return;
+	if (N == 1) {
+		if (bodies[0]->movability)
+			bodies[0]->m_posVec = vAdd(bodies[0]->m_posVec,
+			                           vScale(bodies[0]->m_velVec, dt));
+		resolve(bodies);
+		return;
+	}
+
+	const double c[4] = {  0.6756035959798289, -0.1756035959798289,
+	                       -0.1756035959798289,  0.6756035959798289 };
+	const double d[3] = {  1.3512071919596578, -1.7024143839193156,
+	                        1.3512071919596578 };
+
+	ChainState chain = lc_buildChain(bodies);
+	double ds = dt / std::max(chain.Omega, 1e-30);
+
+	for (int step = 0; step < 4; step++) {
+		lc_drift(chain, c[step] * ds);
+		if (step < 3)
+			lc_kick(chain, bodies, d[step] * ds);
+	}
+
+	lc_chainToCartesian(chain, bodies);
+	dt = chain.t_phys;
+}
+
+// ── moveHermiteLC ────────────────────────────────────────────────────────
+// 4th-order Hermite predictor-corrector (PECE) on the full chain state
+// vector. Uses numerical jerk estimation (one extra RHS evaluation).
+//
+// dt [in/out]: On entry, the current physical timestep.
+//              On return, the Aarseth-recommended next timestep.
+
+double moveHermiteLC(std::vector<std::unique_ptr<Body>>& bodies, double& dt) {
+	int N = static_cast<int>(bodies.size());
+	if (N == 0) return dt;
+	if (N == 1) {
+		if (bodies[0]->movability)
+			bodies[0]->m_posVec = vAdd(bodies[0]->m_posVec,
+			                           vScale(bodies[0]->m_velVec, dt));
+		resolve(bodies);
+		return dt;
+	}
+
+	ChainState chain = lc_buildChain(bodies);
+	int nLinks = N - 1;
+	double ds  = dt / std::max(chain.Omega, 1e-30);
+
+	// ── 1. Evaluate RHS at current state ────────────────────────────
+	ChainDerivs f0;
+	lc_chainRHS(chain, bodies, f0);
+
+	// ── 2. Numerical jerk: j₀ ≈ (f(y+f·ε) − f(y)) / ε ─────────────
+	double eps_j = std::max(ds * 0.01, 1e-12);
+	ChainState state_eps = lc_addScaled(chain, f0, eps_j);
+	ChainDerivs f_eps;
+	lc_chainRHS(state_eps, bodies, f_eps);
+
+	ChainDerivs j0;
+	j0.du.resize(nLinks);  j0.dw.resize(nLinks);  j0.dh.resize(nLinks);
+	for (int k = 0; k < nLinks; k++) {
+		j0.du[k] = vScale(vSub(f_eps.du[k], f0.du[k]), 1.0 / eps_j);
+		j0.dw[k] = vScale(vSub(f_eps.dw[k], f0.dw[k]), 1.0 / eps_j);
+		j0.dh[k] = (f_eps.dh[k] - f0.dh[k]) / eps_j;
+	}
+	j0.dR    = vScale(vSub(f_eps.dR, f0.dR), 1.0 / eps_j);
+	j0.dt_ds = (f_eps.dt_ds - f0.dt_ds) / eps_j;
+
+	// ── 3. Predict (3rd order): y_p = y₀ + f₀·Δs + j₀·(Δs²/2) ─────
+	ChainState state_pred = lc_addScaled(chain, f0, ds);
+	lc_axpy(state_pred, j0, ds * ds * 0.5);
+
+	// ── 4. Evaluate at predicted state ───────────────────────────────
+	ChainDerivs f1;
+	lc_chainRHS(state_pred, bodies, f1);
+
+	// ── 5. Jerk at predicted: j₁ ≈ (f₁ − f₀) / Δs ──────────────────
+	ChainDerivs j1;
+	j1.du.resize(nLinks);  j1.dw.resize(nLinks);  j1.dh.resize(nLinks);
+	for (int k = 0; k < nLinks; k++) {
+		j1.du[k] = vScale(vSub(f1.du[k], f0.du[k]), 1.0 / ds);
+		j1.dw[k] = vScale(vSub(f1.dw[k], f0.dw[k]), 1.0 / ds);
+		j1.dh[k] = (f1.dh[k] - f0.dh[k]) / ds;
+	}
+	j1.dR    = vScale(vSub(f1.dR, f0.dR), 1.0 / ds);
+	j1.dt_ds = (f1.dt_ds - f0.dt_ds) / ds;
+
+	// ── 6. Correct (4th order Hermite for first-order ODE):
+	//       y₁ = y₀ + Δs·(f₀+f₁)/2 + Δs²·(j₀−j₁)/12 ──────────────
+	ChainState state_corr = chain;
+	double ds2_12 = ds * ds / 12.0;
+
+	for (int k = 0; k < nLinks; k++) {
+		// Trapezoidal: Δs·(f₀+f₁)/2
+		state_corr.links[k].u = vAdd(state_corr.links[k].u,
+			vScale(vAdd(f0.du[k], f1.du[k]), ds * 0.5));
+		state_corr.links[k].w = vAdd(state_corr.links[k].w,
+			vScale(vAdd(f0.dw[k], f1.dw[k]), ds * 0.5));
+		state_corr.links[k].h += (f0.dh[k] + f1.dh[k]) * ds * 0.5;
+
+		// Hermite correction: Δs²·(j₀−j₁)/12
+		state_corr.links[k].u = vAdd(state_corr.links[k].u,
+			vScale(vSub(j0.du[k], j1.du[k]), ds2_12));
+		state_corr.links[k].w = vAdd(state_corr.links[k].w,
+			vScale(vSub(j0.dw[k], j1.dw[k]), ds2_12));
+		state_corr.links[k].h += (j0.dh[k] - j1.dh[k]) * ds2_12;
+	}
+	state_corr.R = vAdd(state_corr.R,
+		vScale(vAdd(f0.dR, f1.dR), ds * 0.5));
+	state_corr.R = vAdd(state_corr.R,
+		vScale(vSub(j0.dR, j1.dR), ds2_12));
+	state_corr.t_phys += (f0.dt_ds + f1.dt_ds) * ds * 0.5;
+	state_corr.t_phys += (j0.dt_ds - j1.dt_ds) * ds2_12;
+
+	// ── 7. Aarseth adaptive timestep ─────────────────────────────────
+	const double eta = 0.02;
+	double ds_candidate = 2.0 * ds;
+
+	for (int k = 0; k < nLinks; k++) {
+		double a0 = vMag(f0.dw[k]);
+		double a1 = vMag(j0.dw[k]);
+		vectorP snap_k = vScale(vSub(j0.dw[k], j1.dw[k]), 1.0 / ds);
+		double a2 = vMag(snap_k);
+		double a3 = (a2 > 1e-30 && ds > 1e-30) ? a2 / ds : 0.0;
+
+		double denom = a1 * a3 + a2 * a2;
+		if (denom > 1e-30) {
+			double ds_i = eta * std::sqrt((a0 * a2 + a1 * a1) / denom);
+			ds_candidate = std::min(ds_candidate, ds_i);
+		}
+	}
+	ds_candidate = std::max(ds_candidate, 1e-12);
+
+	// ── 8. Finalize ──────────────────────────────────────────────────
+	state_corr.Omega = lc_computeOmega(state_corr.links);
+	lc_chainToCartesian(state_corr, bodies);
+
+	// Write back recommended next physical timestep
+	dt = std::max(ds_candidate * state_corr.Omega, 1e-7);
+
+	return ds;
+}
+
+// ── moveRK45LC ───────────────────────────────────────────────────────────
+// Dormand-Prince RK45 adaptive integrator applied to the full chain state.
+// Uses the same Butcher tableau and error control as the existing moveRK45.
+//
+// dt [in/out]: current step size. Updated for next call.
+// tol:         error tolerance (default 1e-6).
+// dt_max:      hard ceiling on physical step size (default 1/30 s).
+
+double moveRK45LC(std::vector<std::unique_ptr<Body>>& bodies,
+                double& dt,
+                double  tol    /*= 1e-6*/,
+                double  dt_max /*= 1.0 / 30.0*/) {
+	int N = static_cast<int>(bodies.size());
+	if (N == 0) return dt;
+	if (N == 1) {
+		if (bodies[0]->movability)
+			bodies[0]->m_posVec = vAdd(bodies[0]->m_posVec,
+			                           vScale(bodies[0]->m_velVec, dt));
+		resolve(bodies);
+		return dt;
+	}
+
+	int nLinks = N - 1;
+
+	// ── Dormand-Prince Butcher tableau ───────────────────────────────
+	constexpr double a21 = 1.0 / 5.0;
+	constexpr double a31 = 3.0 / 40.0,         a32 = 9.0 / 40.0;
+	constexpr double a41 = 44.0 / 45.0,         a42 = -56.0 / 15.0,
+	                 a43 = 32.0 / 9.0;
+	constexpr double a51 = 19372.0 / 6561.0,    a52 = -25360.0 / 2187.0,
+	                 a53 = 64448.0 / 6561.0,    a54 = -212.0 / 729.0;
+	constexpr double a61 = 9017.0 / 3168.0,     a62 = -355.0 / 33.0,
+	                 a63 = 46732.0 / 5247.0,    a64 = 49.0 / 176.0,
+	                 a65 = -5103.0 / 18656.0;
+
+	constexpr double b1 = 35.0 / 384.0,     b3 = 500.0 / 1113.0,
+	                 b4 = 125.0 / 192.0,     b5 = -2187.0 / 6784.0,
+	                 b6 = 11.0 / 84.0;
+
+	constexpr double e1 =  71.0 / 57600.0,   e3 = -71.0 / 16695.0,
+	                 e4 =  71.0 / 1920.0,    e5 = -17253.0 / 339200.0,
+	                 e6 =  22.0 / 525.0,     e7 = -1.0 / 40.0;
+
+	constexpr double safety   = 0.9;
+	constexpr double expo     = 1.0 / 5.0;
+	constexpr double max_grow = 5.0;
+	constexpr double min_shrk = 0.2;
+
+	// ── Build chain and compute fictitious step ──────────────────────
+	ChainState chain0 = lc_buildChain(bodies);
+	double ds = dt / std::max(chain0.Omega, 1e-30);
+
+	bool accepted = false;
+
+	while (!accepted) {
+		// ── k1 ───────────────────────────────────────────────────────
+		ChainDerivs k1;
+		{
+			ChainState tmp = chain0;
+			lc_chainRHS(tmp, bodies, k1);
+			chain0.Omega = tmp.Omega;
+		}
+
+		// ── k2 at c2 = 1/5 ──────────────────────────────────────────
+		ChainState s2 = lc_addScaled(chain0, k1, a21 * ds);
+		ChainDerivs k2;
+		lc_chainRHS(s2, bodies, k2);
+
+		// ── k3 at c3 = 3/10 ─────────────────────────────────────────
+		ChainState s3 = chain0;
+		lc_axpy(s3, k1, a31 * ds);
+		lc_axpy(s3, k2, a32 * ds);
+		ChainDerivs k3;
+		lc_chainRHS(s3, bodies, k3);
+
+		// ── k4 at c4 = 4/5 ──────────────────────────────────────────
+		ChainState s4 = chain0;
+		lc_axpy(s4, k1, a41 * ds);
+		lc_axpy(s4, k2, a42 * ds);
+		lc_axpy(s4, k3, a43 * ds);
+		ChainDerivs k4;
+		lc_chainRHS(s4, bodies, k4);
+
+		// ── k5 at c5 = 8/9 ──────────────────────────────────────────
+		ChainState s5 = chain0;
+		lc_axpy(s5, k1, a51 * ds);
+		lc_axpy(s5, k2, a52 * ds);
+		lc_axpy(s5, k3, a53 * ds);
+		lc_axpy(s5, k4, a54 * ds);
+		ChainDerivs k5;
+		lc_chainRHS(s5, bodies, k5);
+
+		// ── k6 at c6 = 1 ────────────────────────────────────────────
+		ChainState s6 = chain0;
+		lc_axpy(s6, k1, a61 * ds);
+		lc_axpy(s6, k2, a62 * ds);
+		lc_axpy(s6, k3, a63 * ds);
+		lc_axpy(s6, k4, a64 * ds);
+		lc_axpy(s6, k5, a65 * ds);
+		ChainDerivs k6;
+		lc_chainRHS(s6, bodies, k6);
+
+		// ── 5th-order solution (b2 = 0 → k2 absent) ─────────────────
+		ChainState y5 = chain0;
+		lc_axpy(y5, k1, b1 * ds);
+		lc_axpy(y5, k3, b3 * ds);
+		lc_axpy(y5, k4, b4 * ds);
+		lc_axpy(y5, k5, b5 * ds);
+		lc_axpy(y5, k6, b6 * ds);
+
+		// ── k7 (FSAL) at the 5th-order solution ─────────────────────
+		ChainDerivs k7;
+		lc_chainRHS(y5, bodies, k7);
+
+		// ── Error estimate ───────────────────────────────────────────
+		double err = 0.0;
+		for (int k = 0; k < nLinks; k++) {
+			// Position error
+			vectorP eu = vScale(k1.du[k], e1);
+			eu = vAdd(eu, vScale(k3.du[k], e3));
+			eu = vAdd(eu, vScale(k4.du[k], e4));
+			eu = vAdd(eu, vScale(k5.du[k], e5));
+			eu = vAdd(eu, vScale(k6.du[k], e6));
+			eu = vAdd(eu, vScale(k7.du[k], e7));
+			eu = vScale(eu, ds);
+
+			// Velocity error
+			vectorP ew = vScale(k1.dw[k], e1);
+			ew = vAdd(ew, vScale(k3.dw[k], e3));
+			ew = vAdd(ew, vScale(k4.dw[k], e4));
+			ew = vAdd(ew, vScale(k5.dw[k], e5));
+			ew = vAdd(ew, vScale(k6.dw[k], e6));
+			ew = vAdd(ew, vScale(k7.dw[k], e7));
+			ew = vScale(ew, ds);
+
+			// Energy error
+			double eh = (k1.dh[k]*e1 + k3.dh[k]*e3 + k4.dh[k]*e4
+			           + k5.dh[k]*e5 + k6.dh[k]*e6 + k7.dh[k]*e7) * ds;
+
+			// Scaled error norms
+			double scu = tol * std::max(1.0, vMag(y5.links[k].u));
+			double scw = tol * std::max(1.0, vMag(y5.links[k].w));
+			double sch = tol * std::max(1.0, std::abs(y5.links[k].h));
+
+			err = std::max(err, vMag(eu) / scu);
+			err = std::max(err, vMag(ew) / scw);
+			err = std::max(err, std::abs(eh) / sch);
+		}
+
+		// ── Step-size factor ─────────────────────────────────────────
+		double factor;
+		if (err < 1e-30)
+			factor = max_grow;
+		else {
+			factor = safety * std::pow(err, -expo);
+			factor = std::min(max_grow, std::max(min_shrk, factor));
+		}
+
+		if (err <= 1.0 || ds <= 1e-15) {
+			// ── Accept ───────────────────────────────────────────────
+			accepted = true;
+			y5.Omega = lc_computeOmega(y5.links);
+			lc_chainToCartesian(y5, bodies);
+
+			// Convert fictitious step adjustment to physical time
+			double ds_new = ds * factor;
+			double Omega_end = y5.Omega;
+			dt = std::min(dt_max, std::max(1e-10, ds_new * Omega_end));
+		} else {
+			// ── Reject: shrink ds and retry ──────────────────────────
+			ds = std::max(1e-15, ds * factor);
+		}
+	}
+	return ds;
+}
+
+} // namespace physics  (chain regularization extension)
+
 struct BodyInput
 {
 	double x, y;
@@ -1407,13 +2312,15 @@ int main()
 
 
 						//auto t0 = clock::now();
-
+						double phys_time,diht;
 
 						for(int s = 0 ; s < hmframe && !bodys.empty() && !WindowShouldClose(); s++)
 						{
 							frame++;
 
-							physics::moveRK45(bodys, dt);
+							diht = physics::moveHermiteLC(bodys, dt);
+							//diht = physics::moveRK45LC(bodys, dt , 0.00001 , dt);
+							phys_time += diht;
 
 							eos(KE , PE , E , bodys);
 							Edifn = E - ogE;
@@ -1486,6 +2393,8 @@ int main()
 								DrawText(TextFormat("position : %f" , bodys[1]->m_posVec.mag()), 0, 520, 20 , BLACK);
 
 								DrawText(TextFormat("dt : %f" , dt) , 1000 , 20, 20 , RED);
+								DrawText(TextFormat("diht : %f" , diht) , 1000 , 40, 20 , RED);
+								DrawText(TextFormat("phys_time : %f" , phys_time) , 1000 , 60, 20 , RED);
 
 								EndDrawing();
 
