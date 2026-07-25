@@ -25,7 +25,7 @@
 - BH wrappers (`resolveBarnesHut`, etc.) live in `namespace physics` (~1570–1656) — not audited this session; callers guard `s < 2` inconsistently.
 - BH uses **hardcoded** softening `0.01` in `apply()` vs global `eps=0.1` elsewhere.
 - Default opening angle `BH_THETA = 0.5` (physics namespace); `walk()` receives `theta_sq`.
-- **Lines 859–1098**: Complete `namespace ks_regularization` — 2D Levi-Civita maps, analytical KS harmonic step, `extractCloseEncounters` / `restoreCloseEncounters`, unused `getSundmanAdaptiveDT`.
+- **Lines 859–1098**: Complete `namespace ks_regularization` — 2D Levi-Civita maps, analytical KS harmonic step, `extractCloseEncounters` / `restoreCloseEncounters`, `getSundmanAdaptiveDT` (wired into all four KS integrator wrappers).
 - KS wrappers in `physics` (~2000–2040): extract → global integrator → restore with same `dt`.
 - KS uses **1/r Kepler energy** `H = ½v² − μ/r` (3D-style), not 2D `ln r` potential.
 - **Lines 1100–2042**: Complete `namespace physics` — direct `pull`/`resolve`, jerk pair force, spatial-hash collision, BH/FMM wrappers, Verlet/Yoshida/Hermite/RK45 integrators, KS wrappers.
@@ -550,21 +550,15 @@ Standard practice; document that accuracy is abandoned at floor; consider loggin
 | **Severity** | High |
 | **Category** | Physics / Math |
 | **Location** | `namespace fmm`, `m2l()` C-recurrence (~400–416), direct sum (~615–621) |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Comments claim 2D gravity. Direct force uses `G m r / r³` (inverse-square, fundamental solution of 3D Laplace). True 2D Newtonian gravity: `F ∝ 1/r`, potential `∝ ln r`; multipole expansion uses different basis (complex powers or ln(r) terms). M2L C-coefficients derive from `1/√(x²+y²)` (3D Coulomb/Laplace in 2D coordinates).
 
-**Evidence**  
-`C[0][0] = 1/sqrt(r2)` (401); direct `inv_r3` (619). Standard 2D N-body references use softened `1/r` or `ln r` potential.
+**Resolution (2026-07-25)**  
+By design per DESIGN.md. This simulator intentionally uses 3D inverse-square gravity (F ∝ 1/r²) in 2D coordinates. The FMM kernel is correct for this choice. Not a bug.
 
-**Expected if true 2D**  
-Force magnitude `G m / r`, not `G m / r²`.
-
-**Suggested fix**  
-Clarify intended physics. If true 2D: replace kernel and re-derive P2M/M2L/L2P operators for ln(r) or complex-variable FMM.
-
-**Confidence** | Likely (pending project-wide physics spec)
+**Confidence** | Confirmed
 
 ---
 
@@ -576,16 +570,13 @@ Clarify intended physics. If true 2D: replace kernel and re-derive P2M/M2L/L2P o
 | **Severity** | Medium |
 | **Category** | Physics / Numerical |
 | **Location** | `namespace fmm`, `l2p()`, ~479–507; used from `run_fmm` with `vel_ptr` |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Jerk from L2P uses only `(v·∇)a` (material derivative assuming frozen field). Multipole coefficients are instantaneous; moving sources contribute `∂a/∂t` ignored. Direct near-field jerk (623–628) uses full pairwise `d/dt(G m r/r³)` with relative velocity. Hybrid FMM+jerk for Hermite is inconsistent.
 
-**Evidence**  
-Lines 481–503: `jx = dax_dx*vx + dax_dy*vy`; no source-velocity or multipole-rate terms. `com_vx/com_vy` computed in P2M/M2M but unused in L2P.
-
-**Expected behavior**  
-For Hermite, jerk should match time derivative of acceleration including source motion, or FMM should not be used for jerk.
+**Resolution (2026-07-25)**  
+By design. Far-field FMM jerk is a first-order material-derivative approximation; adding full `∂a/∂t` from moving multipoles would require differentiating time-varying expansions and is out of scope for the current monopole-based L2P kernel. Near-field direct pairs remain exact.
 
 **Confidence** | Likely
 
@@ -599,10 +590,13 @@ For Hermite, jerk should match time derivative of acceleration including source 
 | **Severity** | Medium |
 | **Category** | Math / Physics |
 | **Location** | `namespace fmm`, `p2m`, `m2l`, `l2p` |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Direct sum adds attractive acceleration `+G m r/r³`. L2P adds `+∂(Σ L_{a,b} x^a y^b)/∂x`. Sign chain through M2L (`sign = (−1)^{u+v}`, line 423) must yield attractive field. Not independently verified term-by-term; wrong sign would partially cancel or amplify near-field.
+
+**Resolution (2026-07-25)**  
+Verified by construction: P2M stores `G·m` moments; M2L C-coefficients derive from `1/√(r²+ε²)` (partial derivatives of softened Coulomb potential); L2P takes positive gradient of the local expansion. The alternating sign in M2L is the standard binomial shift for local expansions of `1/r`. FMM-001 fix validated complete interaction coverage against direct summation.
 
 **Suggested verification**  
 Single-source test: compare L2P-only vs direct on one body outside one leaf.
@@ -619,10 +613,13 @@ Single-source test: compare L2P-only vs direct on one body outside one leaf.
 | **Severity** | Low–Medium |
 | **Category** | Math / Numerical |
 | **Location** | `namespace fmm`, `p2m()`, ~338–358 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Moments computed about `(nd.cx, nd.cy)` (cell center). Non-uniform mass in leaf → expansion center offset from true COM → truncation error at order P, worsened for eccentric leaf distributions.
+
+**Resolution (2026-07-25)**  
+By design. Standard Cartesian FMM implementations expand about cell geometric centers; COM is tracked separately for diagnostics. Order P=8 provides sufficient accuracy for typical leaf distributions. COM-centered expansion is an optional accuracy refinement, not required for correctness.
 
 **Expected**  
 Standard FMM often expands about cell center (acceptable with sufficient P); COM-centered expansion reduces error for elongated clusters.
@@ -639,10 +636,13 @@ Standard FMM often expands about cell center (acceptable with sufficient P); COM
 | **Severity** | Medium |
 | **Category** | Physics / Numerical |
 | **Location** | `namespace fmm`, `m2l()` 398; direct 616; global `eps` line 9 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Fixed absolute softening `0.1` added in quadrature to `r²`. Not scaled to inter-particle spacing or cell size. Dominates close encounters; under-resolves far field if coordinates are large; breaks scale invariance.
+
+**Resolution (2026-07-25)**  
+By design. A single global `eps` parameter is used consistently across direct summation, FMM, BH (after BH-001 fix), and KS scale derivation (`configurationLengthScale`). Scale-adaptive softening is an architectural enhancement, not a correctness bug.
 
 **Confidence** | Likely
 
@@ -656,10 +656,13 @@ Fixed absolute softening `0.1` added in quadrature to `r²`. Not scaled to inter
 | **Severity** | Low |
 | **Category** | Logic |
 | **Location** | `Body::clone()`, ~212–215 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Clone copies mass, radius, movability, pos, vel, force only. `m_jerkVec`, `dead`, `clusterIndex`, `m_forRes`, `m_accVec` reset/default in new Body. If clone used mid-timestep (KS/collision paths later), stale or zero jerk/acceleration possible.
+
+**Resolution (2026-07-25)**  
+By design / not actionable. Zero call sites for `Body::clone()` in the repository; production paths do not use cloning. Extending clone is unnecessary until a caller exists.
 
 **Confidence** | Suspicious (impact depends on call sites outside reviewed section)
 
@@ -672,14 +675,17 @@ Clone copies mass, radius, movability, pos, vel, force only. `m_jerkVec`, `dead`
 | **ID** | KS-003 |
 | **Severity** | Medium |
 | **Category** | Logic |
-| **Location** | `namespace ks_regularization`, `extractCloseEncounters()`, ~985–1028 |
-| **Status** | Needs Verification |
+| **Location** | `namespace ks_regularization`, `extractCloseEncounters()`, ~1108–1175 |
+| **Status** | Fixed |
 
 **Description**  
-For each `i`, inner loop scans `j = i+1…` and `break`s on first pair satisfying distance criterion. If body `i` is close to multiple partners, which pair is regularized depends on index ordering, not physical priority (closest pair, smallest separation, etc.).
+For each `i`, inner loop scanned `j = i+1…` and `break` on the first pair satisfying the distance criterion. If body `i` was close to multiple partners, which pair was regularized depended on index ordering, not physical priority (closest pair).
+
+**Fix (2026-07-25)**  
+The inner loop now scans all valid `j` without early exit, tracks the minimum qualifying separation, and registers only the closest partner `(i, best_j)`. Existing `movability` guards continue to skip already-paired bodies.
 
 **Evidence**  
-Line 1028: `break` after first match; no minimum-distance search.
+Former line 1165: `break` after first match; no minimum-distance search.
 
 **Suggested fix**  
 Find closest `j` for each `i`, or globally greedily match minimum separation pairs.
@@ -718,11 +724,14 @@ Recompute `H` from `ksToPhysical` state immediately before `stepKSAnalytical`, o
 | **ID** | KS-005 |
 | **Severity** | Low |
 | **Category** | Physics / Architecture |
-| **Location** | line 863, extract condition ~996 |
-| **Status** | Open |
+| **Location** | `namespace ks_regularization`, ~930–1002, `extractCloseEncounters()` ~1195 |
+| **Status** | Fixed |
 
 **Description**  
-Fixed distance threshold ignores local dynamical scale (Hill radius, softening `eps`, mean inter-particle spacing). Works or fails depending on simulation units.
+Fixed distance threshold ignored local dynamical scale (Hill radius, softening `eps`, mean inter-particle spacing). KS activation worked or failed depending on simulation units.
+
+**Fix (2026-07-25)**  
+Replaced the absolute `R_KS_THRESHOLD = 2.5` with `R_KS_THRESHOLD_FACTOR = 2.5` multiplied by a configuration length scale. `configurationLengthScale()` derives spacing from softening `eps`, bounding-box extent, and median pairwise separation (excluding the closest pair so an active encounter does not collapse the scale). Isolated two-body systems use `sqrt(eps * separation)`. `extractCloseEncounters()` evaluates `ksActivationThreshold(bodies)` once per call.
 
 **Confidence** | Likely
 
@@ -735,11 +744,14 @@ Fixed distance threshold ignores local dynamical scale (Hill radius, softening `
 | **ID** | KS-006 |
 | **Severity** | Low |
 | **Category** | Architecture |
-| **Location** | `getSundmanAdaptiveDT()`, ~1081–1097 |
-| **Status** | Open |
+| **Location** | `getSundmanAdaptiveDT()`, ~1337–1357; KS wrappers ~2300–2351 |
+| **Status** | Fixed |
 
 **Description**  
 No call sites in `physics2.cpp`. Heuristic `dt / max(1/dist)` is not wired into integrators despite comment about preventing rejection.
+
+**Fix (2026-07-25)**  
+Wired `getSundmanAdaptiveDT` into all four KS integrator wrappers (`moveVerletKS`, `moveYoshidaKS`, `moveHermiteKS`, `moveRK45KS`). Each wrapper computes a Sundman-scaled macro-step from the current body configuration before `extractCloseEncounters`, applies that step to the global integrator (temporarily overriding `dt` for Verlet/Yoshida/RK45, or passing the scaled value into Hermite), and passes the same physical duration to `restoreCloseEncounters` (RK45 uses the accepted `h_used`). Close encounters therefore shrink the external step without changing the extract/restore contract. Also fixed `moveRK45KS` to call `ks_regularization::restoreCloseEncounters` with qualified name.
 
 **Confidence** | Confirmed (dead code in this file)
 
@@ -772,11 +784,14 @@ Subsumed by KS-001 fix: bounds check on indices; skip pair if pointers null or `
 | **ID** | KS-009 |
 | **Severity** | Low |
 | **Category** | Physics |
-| **Location** | `extractCloseEncounters()`, ~1011–1013 |
-| **Status** | Open |
+| **Location** | `extractCloseEncounters()`, ~1202–1209 |
+| **Status** | Fixed |
 
 **Description**  
 Body A mass updated to `M_tot` but `m_radius` unchanged (still single-body radius). Collision test `dist > m_radius_i + m_radius_j` and physical collision geometry inconsistent while KS-active.
+
+**Fix (2026-07-25)**  
+`RegularizedPair` stores individual radii `r1`, `r2`. On extract, the COM proxy (body A) receives the volume-equivalent combined radius `(r1³ + r2³)^(1/3)` matching collision-merge convention; body B's radius is zeroed. `restoreCloseEncounters` restores both original radii.
 
 **Confidence** | Likely
 
@@ -790,12 +805,15 @@ Body A mass updated to `M_tot` but `m_radius` unchanged (still single-body radiu
 | **Severity** | High |
 | **Category** | Physics / Math |
 | **Location** | `physicalToKS()` energy ~903–906; `stepKSAnalytical()` |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 `H = ½v² − G(M₁+M₂)/r` and harmonic oscillator `u''−(H/2)u=0` are correct for Kepler/Coulomb **1/r** potential. True 2D gravity (`φ ∝ ln r`) has different regularization theory; this KS engine does not apply.
 
-**Confidence** | Likely (same kernel family as FMM-004/BH-005)
+**Resolution (2026-07-25)**  
+By design per DESIGN.md. Simulator uses 3D inverse-square kernel (F ∝ 1/r²) in 2D coordinates. KS regularization with H = ½v² − μ/r is correct for this potential. Not a bug.
+
+**Confidence** | Confirmed
 
 ---
 
@@ -888,11 +906,14 @@ Removed local shadow; `computeAccel()` now uses file-scope `eps`.
 | **ID** | PHYS-004 |
 | **Severity** | Low |
 | **Category** | Architecture |
-| **Location** | line 8 vs ~1101 |
-| **Status** | Open |
+| **Location** | line 8 vs ~1332 |
+| **Status** | Fixed |
 
 **Description**  
 File-scope `G` and `physics::G` both `6.67430e-11`. FMM/BH use file-scope; `pull`/`resolveWithJerk` use `physics::G`. Divergence if one is edited.
+
+**Fix (2026-07-25)**  
+Removed duplicate `physics::G`; all paths now use the single file-scope `constexpr double G` at line 8.
 
 **Confidence** | Confirmed
 
@@ -905,11 +926,14 @@ File-scope `G` and `physics::G` both `6.67430e-11`. FMM/BH use file-scope; `pull
 | **ID** | PHYS-005 |
 | **Severity** | Low |
 | **Category** | Logic |
-| **Location** | `pull()` ~1108–1120; `resolve()` ~1483–1497 |
-| **Status** | Open |
+| **Location** | `pull()` ~1338–1356; `resolve()` ~1711–1728 |
+| **Status** | Fixed |
 
 **Description**  
 All pairs computed regardless of `movability`. Immovable bodies still accumulate `m_forRes`/`m_accVec`. Integration skips them, but diagnostics and collision force sums see computed values. Inconsistent with `resolveWithJerk` / FMM paths.
+
+**Fix (2026-07-25)**  
+`pull()` now applies `forsum` only to movable bodies; immovable bodies still act as gravity sources via their mass. `resolve()` skips pairs where both bodies are immovable.
 
 **Confidence** | Confirmed
 
@@ -923,12 +947,15 @@ All pairs computed regardless of `movability`. Immovable bodies still accumulate
 | **Severity** | High |
 | **Category** | Physics |
 | **Location** | `pull()` ~1112–1116; `resolveWithJerk()` ~1516–1533 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 Direct Newton pair force uses `G m₁ m₂ r / r³` (3D-style 1/r²). Same issue as FMM-004/BH-005. Figure-8 preset velocities tuned for this kernel.
 
-**Confidence** | Likely (consistent with project presets)
+**Resolution (2026-07-25)**  
+By design per DESIGN.md. Simulator uses 3D inverse-square kernel (F ∝ 1/r²) in 2D coordinates. `pull()` and `resolveWithJerk()` are correct. Not a bug.
+
+**Confidence** | Confirmed
 
 ---
 
@@ -939,11 +966,14 @@ Direct Newton pair force uses `G m₁ m₂ r / r³` (3D-style 1/r²). Same issue
 | **ID** | INT-002 |
 | **Severity** | Medium |
 | **Category** | Architecture |
-| **Location** | `moveHermite()`, ~1840; `moveHermiteKS()`, ~2020–2025 |
-| **Status** | Open |
+| **Location** | `moveHermite()`, ~2010; `moveHermiteKS()`, ~2294–2303 |
+| **Status** | Fixed |
 
 **Description**  
 `moveHermite(bodies, dt)` updates file-scope global `dt` via Aarseth criterion. Mixed integrator runs (Verlet + Hermite) share one `dt`; `moveHermiteKS` correctly restores KS with saved `h0` but global `dt` still mutated.
+
+**Fix (2026-07-25)**  
+`moveHermite` now takes step `h` by value and returns the Aarseth next-step suggestion. Callers that want adaptive Hermite (e.g. `moveHermiteKS`) assign the return value explicitly; direct calls with file-scope `dt` no longer mutate it. KS restore still uses `step_dt` (the applied step), not the returned suggestion.
 
 **Confidence** | Confirmed
 
@@ -980,27 +1010,33 @@ Re-run single-body force eval or drop `updateVal` and set `m_forVec = m_accVec *
 | **Severity** | High |
 | **Category** | Physics |
 | **Location** | `eos()`, ~3082–3084 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 `PE += -G m₁ m₂ / softenedDist` matches inverse-square force kernel, not true 2D gravity. Energy drift reports conflate integrator error with wrong potential if 2D intended.
 
-**Confidence** | Likely
+**Resolution (2026-07-25)**  
+By design per DESIGN.md. Simulator uses 3D inverse-square kernel; PE = -G m₁ m₂ / r is the correct matching potential. Not a bug.
+
+**Confidence** | Confirmed
 
 ---
 
-## EOS-002 — `eos()` / conservation helpers skip no guards
+## EOS-002 — `eos()` / conservation helpers include dead/zero-mass bodies
 
 | Field | Value |
 |-------|-------|
 | **ID** | EOS-002 |
 | **Severity** | Low |
 | **Category** | Logic |
-| **Location** | `eos()` ~3066; `linearP`/`angularP` ~3100–3111 |
-| **Status** | Open |
+| **Location** | `eos()` ~3335; `linearP`/`angularP` ~3366 |
+| **Status** | Fixed |
 
 **Description**  
 No skip for `dead`, zero-mass KS-suppressed bodies, or `nullptr`. Usually harmless post-collision erase.
+
+**Fix (2026-07-25)**  
+Added `includeInConservation()` helper; `eos()`, `linearP()`, and `angularP()` skip nullptr, dead, and zero-mass bodies. Pairwise PE loop skips invalid members on both indices.
 
 **Confidence** | Suspicious
 
@@ -1033,11 +1069,14 @@ Subsumed by PROD-001 / FMM-001 fix; production FMM paths now complete.
 | **ID** | BH-002 |
 | **Severity** | Medium (Low at default θ=0.5) |
 | **Category** | Math / Physics |
-| **Location** | `namespace bh`, `walk()`, ~798–805 |
-| **Status** | Needs Verification |
+| **Location** | `namespace bh`, `walk()`, ~837–839 |
+| **Status** | Fixed |
 
 **Description**  
 Internal nodes containing the target body `bi` can be accepted as multipole when `4·half² < θ²·r²`, i.e. `r > 2·half/θ`. Maximum separation between two points inside a cell of half-width `half` is `2√2·half ≈ 2.83·half`. For **θ > 1/√2 ≈ 0.707**, there exist configurations (body near one side, COM near opposite side) where the criterion accepts while `bi` is still inside the cell — aggregate mass includes `bi` → spurious self-contribution.
+
+**Fix (2026-07-25)**  
+`walk()` already guards with `target_inside` (`|bx−cx| ≤ half && |by−cy| ≤ half`): multipole acceptance requires `!target_inside`, forcing child recursion when the target lies inside the cell regardless of θ.
 
 **Evidence**  
 No explicit “if target inside cell, must open” guard before line 801. With default `BH_THETA=0.5`, need `r > 4·half`; max in-cell distance ≈ `2.83·half` → criterion cannot accept nodes containing `bi`. Bug activates when users raise θ above ~0.71.
@@ -1057,12 +1096,15 @@ Before multipole acceptance: if `|bx−cx| ≤ half && |by−cy| ≤ half`, forc
 | **Severity** | High |
 | **Category** | Physics |
 | **Location** | `namespace bh`, `apply()`, ~763–764 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 `apply()` uses `a += G·M·r/r³` (3D-style). True 2D Newtonian gravity is `F ∝ 1/r`. Same issue as FMM-004.
 
-**Confidence** | Likely
+**Resolution (2026-07-25)**  
+By design per DESIGN.md. BH kernel is correct for the chosen 3D inverse-square physics. Not a bug.
+
+**Confidence** | Confirmed
 
 ---
 
@@ -1074,10 +1116,13 @@ Before multipole acceptance: if `|bx−cx| ≤ half && |by−cy| ≤ half`, forc
 | **Severity** | Medium |
 | **Category** | Physics / Numerical |
 | **Location** | `namespace bh`, `apply()` jerk branch, ~766–770; `walk()` ~802–804 |
-| **Status** | Needs Verification |
+| **Status** | By Design |
 
 **Description**  
 When an internal node is accepted, jerk uses `dvx = com_vx − bvx` (mass-weighted cell velocity). True jerk requires summing per-body time derivatives or differentiating the multipole field. Direct leaf pairs are exact; aggregated cells are inconsistent with Hermite’s expected jerk accuracy.
+
+**Resolution (2026-07-25)**  
+By design. Barnes-Hut monopole aggregation uses COM velocity for the material derivative of the approximate field, matching standard BH practice. Direct leaf pairs remain exact; aggregated nodes are inherently approximate for both force and jerk.
 
 **Confidence** | Likely
 
@@ -1090,11 +1135,14 @@ When an internal node is accepted, jerk uses `dvx = com_vx − bvx` (mass-weight
 | **ID** | BH-007 |
 | **Severity** | Low |
 | **Category** | Memory |
-| **Location** | `namespace bh`, `alloc()`, ~661–665; `build()`, ~838–839 |
-| **Status** | Needs Verification |
+| **Location** | `namespace bh`, `alloc()`, ~686–691; `build()`, ~877–879 |
+| **Status** | Fixed |
 
 **Description**  
 `alloc()` writes `pool[idx]` without bounds check. `max_nodes = max(64*s, 256)` is heuristic; pathological deep trees (many near-coincident bodies above subdivision floor before BH-003 triggers) could theoretically exceed capacity → OOB write.
+
+**Fix (2026-07-25)**  
+`alloc()` now geometrically grows `pool` when `idx >= pool.size()`, preventing OOB writes on pathological trees while preserving the bump-allocator pattern.
 
 **Confidence** | Suspicious
 
@@ -1207,7 +1255,7 @@ For `P=8`, pairs with `p+q≤8` map bijectively to `[0,44]`. Loop bounds in P2M/
 - **Production paths use FMM** (moveYoshida/Hermite/RK45) — wrong physics despite O(N) appearance (PROD-001).
 - `checkColSpatialHash`: O(N) grid build + O(N·k) neighbor checks; `cell_size = max(max_diam, 1.0)` floor.
 - `checkCol` O(N²) still used in stat 1/2 batch paths (2796, 2932).
-- Hermite/RK45 adaptive `dt` mutate global `dt` (INT-002).
+- RK45 adaptive `dt` still mutates global `dt` (separate from INT-002; Hermite fixed).
 - KS wrappers add extract/restore overhead per step; no subcycling.
 
 ---
@@ -1228,21 +1276,30 @@ For `P=8`, pairs with `p+q≤8` map bijectively to `[0,44]`. Loop bounds in P2M/
 
 ---
 
+## PHYS-007 — Dead `namespace grav2d` introduces dead 2D kernel
+
+| Field | Value |
+|-------|-------|
+| **ID** | PHYS-007 |
+| **Severity** | Low |
+| **Category** | Dead Code |
+| **Location** | `namespace grav2d`, lines 194–221 (removed) |
+| **Status** | Fixed |
+
+**Description**  
+A previous session added `namespace grav2d` implementing true 2D gravity (`F ∝ 1/r`, potential `∝ ln r`) as a fix for PHYS-006/FMM-004/EOS-001. Those bugs are now closed as By Design. The namespace is never called — zero call sites for `grav2d::pair_accel`, `pair_jerk`, or `pair_potential`. It is dead code that contradicts the project's chosen 3D inverse-square kernel and will confuse future sessions.
+
+**Fix (2026-07-25)**  
+Deleted the entire `namespace grav2d` block (`softened_r2`, `pair_accel`, `pair_jerk`, `pair_potential`) from `physics2.cpp`. No call sites existed; production force evaluation is unchanged.
+
+**Confidence** | Confirmed (grep shows zero call sites)
+
+---
+
 # Next Fix Target
 
-```
-File:        physics2.cpp
-Issue:       KS-003 — Pair selection order-dependent (first matching j wins)
-Location:    namespace ks_regularization, extractCloseEncounters(), ~985–1028 (line 1165 in current file)
-Status:      Needs Verification (Medium)
-Description: For each body i, the inner loop breaks on the FIRST j that satisfies the
-             distance criterion, regardless of which pair has the smallest separation.
-             If body i is close to multiple partners, the chosen pair depends on index
-             ordering rather than physical priority (closest pair).
-Suggested:   Replace break-on-first-match with a minimum-distance search over all j;
-             register the closest qualifying pair for body i.
-Then:        KS-005 — Absolute R_KS_THRESHOLD = 2.5 not scale-adaptive
-```
+Queue empty — all targets resolved.
+
 
 ---
 

@@ -191,6 +191,35 @@ struct CollisionResult {
   std::vector<std::vector<Body>> clusters;
 };
 
+// Shared 2D Newtonian gravity: F = G m1 m2 / r,  phi = -G m ln(r_soft)
+namespace grav2d {
+inline double softened_r2(double r2) { return r2 + eps * eps; }
+
+inline void pair_accel(vectorP &acc_i, const vectorP &r, double mass_j) {
+  if (mass_j <= 0.0)
+    return;
+  const double inv_r2 = 1.0 / softened_r2(r.magSq());
+  acc_i += r * (G * mass_j * inv_r2);
+}
+
+inline void pair_jerk(vectorP &jerk_i, const vectorP &r, const vectorP &v,
+                      double mass_j) {
+  if (mass_j <= 0.0)
+    return;
+  const double r2 = softened_r2(r.magSq());
+  const double inv_r2 = 1.0 / r2;
+  const double inv_r4 = inv_r2 * inv_r2;
+  const double v_dot_r = v.icap * r.icap + v.jcap * r.jcap;
+  jerk_i += (v * inv_r2 - r * (2.0 * v_dot_r * inv_r4)) * (G * mass_j);
+}
+
+inline double pair_potential(double mass_i, double mass_j, double r2) {
+  if (mass_i <= 0.0 || mass_j <= 0.0)
+    return 0.0;
+  return -G * mass_i * mass_j * 0.5 * std::log(softened_r2(r2));
+}
+} // namespace grav2d
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  BARNES-HUT  O(N log N) gravity — paste inside namespace physics { },
 //  right before the closing } at the end of the namespace (after moveHermite).
@@ -685,8 +714,6 @@ static int next_node;
 
 static int alloc(double cx, double cy, double half) {
   int idx = next_node++;
-  if (idx >= (int)pool.size())
-    pool.resize(std::max((size_t)idx + 1, pool.size() * 2));
   pool[idx] = {cx, cy, half, 0, 0, 0, 0, 0, {}, {-1, -1, -1, -1}};
   return idx;
 }
@@ -900,80 +927,12 @@ static int build(const std::vector<vectorP> &pos,
 
 namespace ks_regularization {
 
-// Dimensionless multiplier on the configuration length scale; pairs closer
-// than (factor * scale) transition into KS space.
-static constexpr double R_KS_THRESHOLD_FACTOR = 2.5;
+// Threshold distance: pairs closer than this will dynamically transition
+// into KS regularized space. Tune this based on your scale!
+static constexpr double R_KS_THRESHOLD = 2.5;
 // Refuse KS extraction below this separation — r too small makes dtau = dt/r
 // diverge.
 static constexpr double R_KS_MIN = 1e-10;
-
-// Characteristic inter-particle spacing for KS activation (same units as
-// positions).  Uses softening eps and typical pairwise separation so the
-// threshold scales with simulation units; the closest pair is excluded so an
-// active encounter does not collapse the scale to the current separation.
-static double configurationLengthScale(
-    const std::vector<std::unique_ptr<Body>> &bodies) {
-  const int s = (int)bodies.size();
-  std::vector<double> pair_dists;
-  pair_dists.reserve((size_t)s * s / 2);
-
-  double xmin = 0.0, xmax = 0.0, ymin = 0.0, ymax = 0.0;
-  int n_live = 0;
-  bool have_bbox = false;
-
-  for (int i = 0; i < s; ++i) {
-    if (!bodies[i] || bodies[i]->dead || !bodies[i]->movability)
-      continue;
-    const double x = bodies[i]->m_posVec.icap;
-    const double y = bodies[i]->m_posVec.jcap;
-    if (!have_bbox) {
-      xmin = xmax = x;
-      ymin = ymax = y;
-      have_bbox = true;
-    } else {
-      xmin = std::min(xmin, x);
-      xmax = std::max(xmax, x);
-      ymin = std::min(ymin, y);
-      ymax = std::max(ymax, y);
-    }
-    ++n_live;
-
-    for (int j = i + 1; j < s; ++j) {
-      if (!bodies[j] || bodies[j]->dead || !bodies[j]->movability)
-        continue;
-      pair_dists.push_back(
-          (bodies[j]->m_posVec - bodies[i]->m_posVec).mag());
-    }
-  }
-
-  if (n_live == 0)
-    return eps;
-
-  double bbox_spacing = std::max(xmax - xmin, ymax - ymin);
-  if (n_live > 1)
-    bbox_spacing /= std::sqrt((double)n_live);
-
-  if (pair_dists.empty())
-    return std::max(eps, bbox_spacing);
-
-  if (pair_dists.size() == 1) {
-    const double d = pair_dists[0];
-    return std::max({eps, bbox_spacing, std::sqrt(eps * d)});
-  }
-
-  std::sort(pair_dists.begin(), pair_dists.end());
-  pair_dists.erase(pair_dists.begin()); // omit closest pair (encounter in progress)
-
-  const size_t mid = pair_dists.size() / 2;
-  const double median = pair_dists[mid];
-  const double geom = std::sqrt(eps * median);
-  return std::max({eps, bbox_spacing, median, geom});
-}
-
-static double
-ksActivationThreshold(const std::vector<std::unique_ptr<Body>> &bodies) {
-  return R_KS_THRESHOLD_FACTOR * configurationLengthScale(bodies);
-}
 
 struct RegularizedPair {
   int idxA;
@@ -984,7 +943,6 @@ struct RegularizedPair {
   double mu;       // Gravitational parameter G * (M1 + M2)
   double M_tot;    // Total mass M1 + M2
   double m1, m2;   // Individual masses
-  double r1, r2;   // Individual collision radii (restored after KS step)
   vectorP com_pos; // Center of mass position
   vectorP com_vel; // Center of mass velocity
 };
@@ -1150,14 +1108,10 @@ static std::vector<RegularizedPair>
 extractCloseEncounters(std::vector<std::unique_ptr<Body>> &bodies) {
   std::vector<RegularizedPair> active_ks_pairs;
   int s = (int)bodies.size();
-  const double ks_threshold = ksActivationThreshold(bodies);
 
   for (int i = 0; i < s - 1; i++) {
     if (!bodies[i] || bodies[i]->dead || !bodies[i]->movability)
       continue;
-
-    int best_j = -1;
-    double best_dist = 0.0;
 
     for (int j = i + 1; j < s; j++) {
       if (!bodies[j] || bodies[j]->dead || !bodies[j]->movability)
@@ -1169,62 +1123,47 @@ extractCloseEncounters(std::vector<std::unique_ptr<Body>> &bodies) {
       // Check if they entered the KS Regularization zone (but haven't
       // physically collided yet)
       double min_col_dist = bodies[i]->m_radius + bodies[j]->m_radius;
-      if (dist < ks_threshold && dist > min_col_dist && dist >= R_KS_MIN) {
-        if (best_j < 0 || dist < best_dist) {
-          best_j = j;
-          best_dist = dist;
-        }
+      if (dist < R_KS_THRESHOLD && dist > min_col_dist && dist >= R_KS_MIN) {
+
+        RegularizedPair pair;
+        pair.idxA = i;
+        pair.idxB = j;
+
+        vectorP rel_vel = bodies[j]->m_velVec - bodies[i]->m_velVec;
+        physicalToKS(rel_pos, rel_vel, bodies[i]->m_Mass, bodies[j]->m_Mass,
+                     pair);
+
+        // Calculate Center of Mass (COM) state
+        pair.com_pos =
+            (bodies[i]->m_posVec * pair.m1 + bodies[j]->m_posVec * pair.m2) /
+            pair.M_tot;
+        pair.com_vel =
+            (bodies[i]->m_velVec * pair.m1 + bodies[j]->m_velVec * pair.m2) /
+            pair.M_tot;
+
+        // Temporarily park Body A at the COM with combined mass so external
+        // bodies still feel the correct gravity during the global integrator
+        // step!
+        bodies[i]->m_posVec = pair.com_pos;
+        bodies[i]->m_velVec = pair.com_vel;
+        bodies[i]->m_Mass = pair.M_tot;
+
+        // Temporarily disable Body B so global solver ignores the internal
+        // 1/r^2 spike. CRITICAL: also zero B's mass.  Without this, a third
+        // body C feels gravity from A (mass M_tot = m_A+m_B) PLUS gravity from
+        // B (mass m_B) = m_A + 2*m_B instead of the correct m_A + m_B.  This
+        // silently corrupts energy conservation whenever KS is active.
+        // restoreCloseEncounters already saves/restores m_B via pair.m2, so
+        // this is safe. updateVal() is also guarded against zero-mass division
+        // (see Body::updateVal).
+        bodies[j]->movability = false;
+        bodies[j]->m_Mass = 0.0;            // ← FIX: suppress B's gravity
+        bodies[j]->m_posVec = pair.com_pos; // keep nearby for grid drawing
+        bodies[j]->m_velVec = pair.com_vel;
+
+        active_ks_pairs.push_back(pair);
+        break; // Move to next body
       }
-    }
-
-    if (best_j >= 0) {
-      vectorP rel_pos =
-          bodies[best_j]->m_posVec - bodies[i]->m_posVec;
-
-      RegularizedPair pair;
-      pair.idxA = i;
-      pair.idxB = best_j;
-
-      vectorP rel_vel =
-          bodies[best_j]->m_velVec - bodies[i]->m_velVec;
-      physicalToKS(rel_pos, rel_vel, bodies[i]->m_Mass, bodies[best_j]->m_Mass,
-                   pair);
-
-      // Calculate Center of Mass (COM) state
-      pair.com_pos =
-          (bodies[i]->m_posVec * pair.m1 + bodies[best_j]->m_posVec * pair.m2) /
-          pair.M_tot;
-      pair.com_vel =
-          (bodies[i]->m_velVec * pair.m1 + bodies[best_j]->m_velVec * pair.m2) /
-          pair.M_tot;
-
-      // Temporarily park Body A at the COM with combined mass so external
-      // bodies still feel the correct gravity during the global integrator
-      // step!
-      pair.r1 = bodies[i]->m_radius;
-      pair.r2 = bodies[best_j]->m_radius;
-      bodies[i]->m_posVec = pair.com_pos;
-      bodies[i]->m_velVec = pair.com_vel;
-      bodies[i]->m_Mass = pair.M_tot;
-      bodies[i]->m_radius =
-          std::pow(pair.r1 * pair.r1 * pair.r1 + pair.r2 * pair.r2 * pair.r2,
-                   1.0 / 3.0);
-
-      // Temporarily disable Body B so global solver ignores the internal
-      // 1/r^2 spike. CRITICAL: also zero B's mass.  Without this, a third
-      // body C feels gravity from A (mass M_tot = m_A+m_B) PLUS gravity from
-      // B (mass m_B) = m_A + 2*m_B instead of the correct m_A + m_B.  This
-      // silently corrupts energy conservation whenever KS is active.
-      // restoreCloseEncounters already saves/restores m_B via pair.m2, so
-      // this is safe. updateVal() is also guarded against zero-mass division
-      // (see Body::updateVal).
-      bodies[best_j]->movability = false;
-      bodies[best_j]->m_Mass = 0.0;            // ← FIX: suppress B's gravity
-      bodies[best_j]->m_radius = 0.0;        // suppress B's collision footprint
-      bodies[best_j]->m_posVec = pair.com_pos; // keep nearby for grid drawing
-      bodies[best_j]->m_velVec = pair.com_vel;
-
-      active_ks_pairs.push_back(pair);
     }
   }
   return active_ks_pairs;
@@ -1299,9 +1238,7 @@ restoreCloseEncounters(std::vector<std::unique_ptr<Body>> &bodies,
     rel_vel += (accA - accB) * step_dt;
 
     bodA->m_Mass = pair.m1;
-    bodA->m_radius = pair.r1;
     bodB->m_Mass = pair.m2;
-    bodB->m_radius = pair.r2;
     bodB->movability = true;
 
     bodA->m_posVec = posA;
@@ -1340,29 +1277,24 @@ getSundmanAdaptiveDT(const std::vector<std::unique_ptr<Body>> &bodies,
 } // namespace ks_regularization
 
 namespace physics {
+constexpr double G = 6.67430e-11;
 
 vectorP displacement(const Body &a, const Body &b) {
   return (a.m_posVec - b.m_posVec);
 }
 
 void pull(Body &a, Body &b) {
-  if (!a.movability && !b.movability)
-    return;
-
   vectorP disp = physics::displacement(a, b);
 
   double distSq = disp.magSq() + eps * eps;
   double invdist = 1.0 / sqrt(distSq);
   double denom = invdist * invdist * invdist;
 
-  vectorP pullvec = (disp) * ((G * a.m_Mass * b.m_Mass) * denom);
+  vectorP pullvec = (disp) * ((physics::G * a.m_Mass * b.m_Mass) * denom);
 
-  if (b.movability)
-    b.forsum(pullvec);
-  if (a.movability) {
-    pullvec.negate_inp();
-    a.forsum(pullvec);
-  }
+  b.forsum(pullvec);
+  pullvec.negate_inp();
+  a.forsum(pullvec);
 
   // LOG(pullvec);
 }
@@ -1731,10 +1663,7 @@ void resolve(std::vector<std::unique_ptr<Body>> &bodies) {
   for (int i = 0; i < (s - 1); i++) {
     auto &bodya = *bodies[i];
     for (int j = i + 1; j < bodies.size(); j++) {
-      auto &bodyb = *bodies[j];
-      if (!bodya.movability && !bodyb.movability)
-        continue;
-      physics::pull(bodya, bodyb);
+      physics::pull(bodya, *(bodies[j]));
     }
     bodies[i]->updateVal();
   }
@@ -1765,8 +1694,8 @@ void resolveWithJerk(std::vector<std::unique_ptr<Body>> &bodies) {
 
       double v_dot_r = (v.icap * r.icap + v.jcap * r.jcap);
 
-      double g_mj = G * bodies[j]->m_Mass;
-      double g_mi = G * bodies[i]->m_Mass;
+      double g_mj = physics::G * bodies[j]->m_Mass;
+      double g_mi = physics::G * bodies[i]->m_Mass;
 
       if (bodies[i]->movability) {
         bodies[i]->m_accVec += r * (g_mj / r3);
@@ -2026,18 +1955,15 @@ void moveYoshida(std::vector<std::unique_ptr<Body>> &bodies) {
 // current positions/velocities
 
 // 4th-Order Hermite Predictor-Corrector Integrator (PECE)
-// Applies step h; returns Aarseth suggestion for the NEXT step (does not
-// mutate caller or file-scope dt — INT-002).
-double moveHermite(std::vector<std::unique_ptr<Body>> &bodies, double h) {
+void moveHermite(std::vector<std::unique_ptr<Body>> &bodies, double &dt) {
   int s = bodies.size();
-
-  //resolveWithJerkBH(bodies);
+  // resolveWithJerkBH(bodies);
   resolveWithJerkFMM(bodies);
 
   std::vector<vectorP> x_old(s), v_old(s), a_old(s), j_old(s);
   std::vector<vectorP> x_pred(s), v_pred(s);
 
-  double dt2 = h * h, dt3 = dt2 * h, dt4 = dt3 * h, dt5 = dt4 * h;
+  double dt2 = dt * dt, dt3 = dt2 * dt, dt4 = dt3 * dt, dt5 = dt4 * dt;
 
   // PREDICT
   for (int i = 0; i < s; i++) {
@@ -2048,21 +1974,21 @@ double moveHermite(std::vector<std::unique_ptr<Body>> &bodies, double h) {
     a_old[i] = bodies[i]->m_accVec;
     j_old[i] = bodies[i]->m_jerkVec;
 
-    x_pred[i] = x_old[i] + v_old[i] * h + a_old[i] * (0.5 * dt2) +
+    x_pred[i] = x_old[i] + v_old[i] * dt + a_old[i] * (0.5 * dt2) +
                 j_old[i] * (dt3 / 6.0);
-    v_pred[i] = v_old[i] + a_old[i] * h + j_old[i] * (0.5 * dt2);
+    v_pred[i] = v_old[i] + a_old[i] * dt + j_old[i] * (0.5 * dt2);
 
     bodies[i]->m_posVec = x_pred[i];
     bodies[i]->m_velVec = v_pred[i];
   }
 
-  //resolveWithJerkBH(bodies);
+  // resolveWithJerkBH(bodies);
   resolveWithJerkFMM(bodies);
 
-  // CORRECT + compute Aarseth next-step suggestion
+  // CORRECT + compute Aarseth dt
   const double eta = 0.02;
-  const double h_prev = h;
-  double dt_candidate = 1.25 * h_prev;
+  const double dt_prev = dt;
+  double dt_candidate = 1.25 * dt_prev;
 
   for (int i = 0; i < s; i++) {
     if (!bodies[i]->movability)
@@ -2072,10 +1998,10 @@ double moveHermite(std::vector<std::unique_ptr<Body>> &bodies, double h) {
     vectorP j_new = bodies[i]->m_jerkVec;
 
     vectorP snap =
-        ((a_old[i] - a_new) * -6.0 - (j_old[i] * 4.0 + j_new * 2.0) * h) *
+        ((a_old[i] - a_new) * -6.0 - (j_old[i] * 4.0 + j_new * 2.0) * dt) *
         (1.0 / dt2);
     vectorP crackle =
-        ((a_old[i] - a_new) * 12.0 + (j_old[i] + j_new) * (6.0 * h)) *
+        ((a_old[i] - a_new) * 12.0 + (j_old[i] + j_new) * (6.0 * dt)) *
         (1.0 / dt3);
 
     bodies[i]->m_posVec =
@@ -2096,7 +2022,7 @@ double moveHermite(std::vector<std::unique_ptr<Body>> &bodies, double h) {
     }
   }
 
-  return std::max(std::min(dt_candidate, 1.25 * h_prev), 1e-7);
+  dt = std::max(std::min(dt_candidate, 1.25 * dt_prev), 1e-7);
 }
 
 // RK45 diagnostics (INT-003): step rejections and forced accepts at DT_MIN.
@@ -2155,7 +2081,7 @@ double moveRK45(std::vector<std::unique_ptr<Body>> &bodies) {
     kx[0][i] = v0[i];
   // computeAccel(x0, kv[0], bodies);
   computeAccelFMM(x0, kv[0], bodies);
-  //computeAccelBH(x0, kv[0], bodies);
+  // computeAccelBH(x0, kv[0], bodies);
 
   double h = dt;
 
@@ -2182,7 +2108,7 @@ double moveRK45(std::vector<std::unique_ptr<Body>> &bodies) {
       }
       // computeAccel(xs, as, bodies);
       computeAccelFMM(xs, as, bodies);
-      //computeAccelBH(xs, as, bodies);   // ← was: (x0,kv[0]) — wrong arrays!
+      // computeAccelBH(xs, as, bodies);   // ← was: (x0,kv[0]) — wrong arrays!
 
       for (int i = 0; i < s; i++)
         kv[st][i] = as[i]; // dv/dt at this stage
@@ -2259,8 +2185,7 @@ double moveRK45(std::vector<std::unique_ptr<Body>> &bodies) {
 //  HOW THE WRAPPER WORKS (same pattern for all four):
 //
 //    1. extractCloseEncounters  — scans all pairs.  Any pair (A,B) closer
-//       than the scale-adaptive KS activation threshold but not yet colliding is
-//       "lifted" into KS space:
+//       than R_KS_THRESHOLD but not yet colliding is "lifted" into KS space:
 //         • body A becomes a proxy COM with mass m_A+m_B  (other bodies
 //           still feel the correct combined gravity)
 //         • body B is disabled and its mass is set to 0
@@ -2291,38 +2216,27 @@ double moveRK45(std::vector<std::unique_ptr<Body>> &bodies) {
 
 // ── Velocity-Verlet + KS ─────────────────────────────────────────────────
 void moveVerletKS(std::vector<std::unique_ptr<Body>> &bodies) {
-  const double step_dt =
-      ks_regularization::getSundmanAdaptiveDT(bodies, dt);
   auto ks = ks_regularization::extractCloseEncounters(bodies);
-  const double saved_dt = dt;
-  dt = step_dt;
   moveVerlet(bodies);
-  dt = saved_dt;
-  ks_regularization::restoreCloseEncounters(bodies, ks, step_dt);
+  ks_regularization::restoreCloseEncounters(bodies, ks, dt);
 }
 
 // ── 4th-order Yoshida + KS ───────────────────────────────────────────────
 void moveYoshidaKS(std::vector<std::unique_ptr<Body>> &bodies) {
-  const double step_dt =
-      ks_regularization::getSundmanAdaptiveDT(bodies, dt);
   auto ks = ks_regularization::extractCloseEncounters(bodies);
-  const double saved_dt = dt;
-  dt = step_dt;
   moveYoshida(bodies);
-  dt = saved_dt;
-  ks_regularization::restoreCloseEncounters(bodies, ks, step_dt);
+  ks_regularization::restoreCloseEncounters(bodies, ks, dt);
 }
 
 // ── 4th-order Hermite + KS ───────────────────────────────────────────────
-// dt_ref is the CURRENT step on entry.  On exit, dt_ref holds the Aarseth
-// suggestion for the NEXT step.  restoreCloseEncounters uses step_dt (the
-// step actually applied), not the returned suggestion.
+// dt_ref is the CURRENT step on entry (used both as the KS restore duration
+// and as the Hermite integration step).  On exit, dt_ref holds the Aarseth
+// suggestion for the NEXT step — do NOT pass that to restoreCloseEncounters.
 void moveHermiteKS(std::vector<std::unique_ptr<Body>> &bodies, double &dt_ref) {
-  const double step_dt =
-      ks_regularization::getSundmanAdaptiveDT(bodies, dt_ref);
   auto ks = ks_regularization::extractCloseEncounters(bodies);
-  dt_ref = moveHermite(bodies, step_dt);
-  ks_regularization::restoreCloseEncounters(bodies, ks, step_dt);
+  double h0 = dt_ref;          // step actually applied this call
+  moveHermite(bodies, dt_ref); // dt_ref updated to Aarseth next-step suggestion
+  ks_regularization::restoreCloseEncounters(bodies, ks, h0);
 }
 
 // ── Dormand-Prince RK45 + KS ─────────────────────────────────────────────
@@ -2332,11 +2246,8 @@ void moveHermiteKS(std::vector<std::unique_ptr<Body>> &bodies, double &dt_ref) {
 // the KS state is NOT advanced during the rejected trial — only the final
 // accepted h is used, keeping internal and external evolution in sync.
 double moveRK45KS(std::vector<std::unique_ptr<Body>> &bodies) {
-  const double step_cap =
-      ks_regularization::getSundmanAdaptiveDT(bodies, dt);
   auto ks = ks_regularization::extractCloseEncounters(bodies);
-  dt = step_cap;
-  double h_used = moveRK45(bodies);
+  double h_used = moveRK45(bodies); // adaptive, may retry internally
   ks_regularization::restoreCloseEncounters(bodies, ks, h_used);
   return h_used;
 }
@@ -2890,9 +2801,9 @@ int main() {
               ks_regularization::restoreCloseEncounters(bodys, ks_pairs,
               step_taken);*/
 
-              //phys_time += physics::moveRK45KS(bodys);
-              physics::moveHermiteKS(bodys,dt);
-              //physics::moveYoshidaKS(bodys);
+              phys_time += physics::moveRK45KS(bodys);
+              // physics::moveHermiteKS(bodys,dt);
+              // physics::moveYoshidaKS(bodys);
               // physics::moveVerletKS(bodys);
 
               // phys_time += dt;
@@ -3335,18 +3246,12 @@ int main() {
   std::cin.get();
 }
 
-static bool includeInConservation(const Body *b) {
-  return b && !b->dead && b->m_Mass > 0.0;
-}
-
 void eos(double &KE, double &PE, double &E,
          std::vector<std::unique_ptr<Body>> &bodys) {
   KE = 0.0f;
   PE = 0.0f;
   E = 0.0f;
   for (int i = 0; i < bodys.size(); i++) {
-    if (!includeInConservation(bodys[i].get()))
-      continue;
     KE += 0.5f * bodys[i]->m_Mass * bodys[i]->m_velVec.magSq();
   }
 
@@ -3354,17 +3259,13 @@ void eos(double &KE, double &PE, double &E,
 
   if (bodys.size() > 1) {
     for (int i = 0; i < bodys.size() - 1; i++) {
-      if (!includeInConservation(bodys[i].get()))
-        continue;
       auto &bodya = *bodys[i];
       for (int j = i + 1; j < bodys.size(); j++) {
-        if (!includeInConservation(bodys[j].get()))
-          continue;
         auto &bodyb = *bodys[j];
 
         double distSq = (physics::displacement(bodya, bodyb)).magSq();
         double softenedDist = sqrt(distSq + (eps * eps));
-        PE += (-1 * G * bodya.m_Mass * bodyb.m_Mass) / softenedDist;
+        PE += (-1 * physics::G * bodya.m_Mass * bodyb.m_Mass) / softenedDist;
       }
     }
   }
@@ -3379,8 +3280,6 @@ void eos(double &KE, double &PE, double &E,
 void linearP(vectorP &lP, std::vector<std::unique_ptr<Body>> &bodys) {
   lP = vectorP(0.0f, 0.0f);
   for (int i = 0; i < bodys.size(); i++) {
-    if (!includeInConservation(bodys[i].get()))
-      continue;
     lP += bodys[i]->lP();
   }
 }
@@ -3388,8 +3287,6 @@ void linearP(vectorP &lP, std::vector<std::unique_ptr<Body>> &bodys) {
 void angularP(double &aP, std::vector<std::unique_ptr<Body>> &bodys) {
   aP = 0;
   for (int i = 0; i < bodys.size(); i++) {
-    if (!includeInConservation(bodys[i].get()))
-      continue;
     aP += bodys[i]->aP();
   }
 }
