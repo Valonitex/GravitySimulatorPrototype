@@ -11,6 +11,7 @@ always do it in this form :- 0.1666f ;
 always i repeat ALWAYS check if its *= or *
 
 ------------------------------------------
+"I started it because I just needed a working gravity simulator for a game."
 
 no need for normalizing vectors as your slready just adding and subtracting vectors with directions
 

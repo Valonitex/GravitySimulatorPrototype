@@ -10,6 +10,7 @@ find_package(glfw3 3.3 REQUIRED)
 find_package(GLEW REQUIRED)
 
 add_executable(GsimTerm GravitySimulatorPrototype/physics.cpp)
+add_executable(GsimTerm1 GravitySimulatorPrototype/physics1.cpp)
 add_executable(OpenGLingsim
         OpenGL/src/Application.cpp
         OpenGL/src/IndexBuffer.cpp
@@ -20,16 +21,16 @@ add_executable(OpenGLingsim
         OpenGL/src/Renderer.cpp
         #OpenGL/src/
 )
-add_executable(RaylibDemo RaylibDemo/main.cpp)
-
-target_include_directories(RaylibDemo PRIVATE ${RAYLIB_DIR}/include)
-target_link_directories(RaylibDemo PRIVATE ${RAYLIB_DIR}/lib)
-target_link_libraries(RaylibDemo raylib m pthread dl rt X11)
 
 target_include_directories(GsimTerm PRIVATE ../GravitySimulatorPrototype)
 target_include_directories(GsimTerm PRIVATE ${RAYLIB_DIR}/include)
 target_link_directories(GsimTerm PRIVATE ${RAYLIB_DIR}/lib)
 target_link_libraries(GsimTerm raylib m pthread dl rt X11)
+
+target_include_directories(GsimTerm1 PRIVATE ../GravitySimulatorPrototype)
+target_include_directories(GsimTerm1 PRIVATE ${RAYLIB_DIR}/include)
+target_link_directories(GsimTerm1 PRIVATE ${RAYLIB_DIR}/lib)
+target_link_libraries(GsimTerm1 raylib m pthread dl rt X11)
 
 target_include_directories(OpenGLingsim PRIVATE OpenGL)
 target_link_libraries(OpenGLingsim OpenGL::GL glfw GLEW::GLEW)
