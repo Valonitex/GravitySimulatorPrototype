@@ -2357,8 +2357,8 @@ int main()
 						{
 							frame++;
 
-							diht = physics::moveHermiteLC(bodys, dt);
-							//diht = physics::moveRK45LC(bodys, dt , 0.00001 , dt);
+							//diht = physics::moveHermiteLC(bodys, dt);
+							diht = physics::moveRK45LC(bodys, dt , 0.00001 , 1/30.0);
 							phys_time += diht;
 
 							eos(KE , PE , E , bodys);
