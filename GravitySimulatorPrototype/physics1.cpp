@@ -327,7 +327,7 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
       continue;
     }
 
-    float totalMass = 0.0f;
+    double totalMass = 0.0f;
     vectorP wPos = vectorP(0, 0);
     vectorP wVel = vectorP(0, 0);
     vectorP totalForce = vectorP(0, 0);
@@ -408,23 +408,26 @@ void resolve(std::vector<std::unique_ptr<Body>> &bodies) {
   bodies[s - 1]->updateVal();
 }
 
-void moveVerlet(std::vector<std::unique_ptr<Body>> &bodies) {
+void moveVerlet(std::vector<std::unique_ptr<Body>> &bodies)
+{
   resolve(bodies);
   int s = bodies.size();
   std::vector<vectorP> oldacc(s);
   double dtb2 = dt / 2;
   double dt2b2 = dt * dtb2;
   for (int i = 0; i < s; i++) {
-    if (bodies[i]->movability != false) {
+    if (bodies[i]->movability != false)
+    {
       vectorP temp = bodies[i]->m_accVec;
-      bodies[i]->m_posVec +=
-          /*bodies[i]->m_posVec*/ bodies[i]->m_velVec * dt + (temp * dt2b2);
+      bodies[i]->m_posVec += /*bodies[i]->m_posVec*/ bodies[i]->m_velVec * dt + (temp * dt2b2);
       oldacc[i] = temp;
     }
   }
   resolve(bodies);
-  for (int i = 0; i < s; i++) {
-    if (bodies[i]->movability != false) {
+  for (int i = 0; i < s; i++)
+  {
+    if (bodies[i]->movability != false)
+    {
       bodies[i]->m_velVec += (oldacc[i] + bodies[i]->m_accVec) * dtb2;
     }
   }
@@ -459,6 +462,7 @@ void moveYoshida(std::vector<std::unique_ptr<Body>> &bodies) {
       }
     }
   }
+  resolve(bodies);
 }
 
 // Helper function to resolve both Acceleration AND Jerk at current
@@ -1409,7 +1413,7 @@ static ChainState lc_addScaled(const ChainState &state, const ChainDerivs &f,
 
 // Drift: advance positions (u, R, t) using current velocities (w).
 // Ω is evaluated at the START of the drift, then recomputed after.
-static void lc_drift(ChainState &chain, double ds) {
+/*static void lc_drift(ChainState &chain, double ds) {
   double Omega = chain.Omega;
   int nLinks = static_cast<int>(chain.links.size());
 
@@ -1425,8 +1429,94 @@ static void lc_drift(ChainState &chain, double ds) {
 
   // Recompute Ω at new positions
   chain.Omega = lc_computeOmega(chain.links);
-}
+}*/
 
+/*static void lc_drift(ChainState &chain, double ds) {
+  int nLinks = static_cast<int>(chain.links.size());
+  double Omega = chain.Omega;
+
+  // Save u values at start of drift
+  std::vector<vectorP> u0(nLinks);
+  for (int k = 0; k < nLinks; k++)
+    u0[k] = chain.links[k].u;
+
+  // Predictor: explicit Euler with frozen Omega and r_k
+  std::vector<vectorP> u1(nLinks);
+  for (int k = 0; k < nLinks; k++) {
+    double rk    = std::max(vMagSq(u0[k]), 1e-30);
+    double alpha = Omega / rk;
+    u1[k] = vAdd(u0[k], vScale(chain.links[k].w, alpha * ds));
+  }
+  // Corrector: 3 iterations of implicit midpoint
+  for (int iter = 0; iter < 3; iter++) {
+    // Build midpoint links to recompute Omega at midpoint positions
+    std::vector<LCLink> midLinks = chain.links;
+    for (int k = 0; k < nLinks; k++)
+      midLinks[k].u = vScale(vAdd(u0[k], u1[k]), 0.5);
+
+    double Omega_mid = lc_computeOmega(midLinks);
+
+    for (int k = 0; k < nLinks; k++) {
+      vectorP u_mid = midLinks[k].u;
+      double  r_mid = std::max(vMagSq(u_mid), 1e-30);
+      double  alpha_mid = Omega_mid / r_mid;
+      u1[k] = vAdd(u0[k], vScale(chain.links[k].w, alpha_mid * ds));
+    }
+  }
+  // Commit
+  for (int k = 0; k < nLinks; k++)
+    chain.links[k].u = u1[k];
+
+  chain.R      = vAdd(chain.R, vScale(chain.V_cm, Omega * ds));
+  chain.t_phys += Omega * ds;
+
+  chain.Omega = lc_computeOmega(chain.links);
+}*/
+
+static void lc_drift(ChainState &chain, double ds) {
+  int nLinks = static_cast<int>(chain.links.size());
+  double Omega = chain.Omega;
+
+  // Save u values at start of drift
+  std::vector<vectorP> u0(nLinks);
+  for (int k = 0; k < nLinks; k++)
+    u0[k] = chain.links[k].u;
+
+  // Predictor: explicit Euler with frozen Omega and r_k
+  std::vector<vectorP> u1(nLinks);
+  for (int k = 0; k < nLinks; k++) {
+    double rk    = std::max(vMagSq(u0[k]), 1e-30);
+    double alpha = Omega / rk;
+    u1[k] = vAdd(u0[k], vScale(chain.links[k].w, alpha * ds));
+  }
+
+  // Corrector: 3 iterations of implicit midpoint
+  double Omega_mid = Omega;  // ← hoisted; final value used for R and t_phys
+  for (int iter = 0; iter < 3; iter++) {
+    std::vector<LCLink> midLinks = chain.links;
+    for (int k = 0; k < nLinks; k++)
+      midLinks[k].u = vScale(vAdd(u0[k], u1[k]), 0.5);
+
+    Omega_mid = lc_computeOmega(midLinks);  // ← updates the outer variable
+
+    for (int k = 0; k < nLinks; k++) {
+      vectorP u_mid  = midLinks[k].u;
+      double  r_mid  = std::max(vMagSq(u_mid), 1e-30);
+      double  alpha_mid = Omega_mid / r_mid;
+      u1[k] = vAdd(u0[k], vScale(chain.links[k].w, alpha_mid * ds));
+    }
+  }
+
+  // Commit
+  for (int k = 0; k < nLinks; k++)
+    chain.links[k].u = u1[k];
+
+  // Use midpoint Omega — consistent with the corrected u_k
+  chain.R      = vAdd(chain.R, vScale(chain.V_cm, Omega_mid * ds));  // was Omega
+  chain.t_phys += Omega_mid * ds;                                     // was Omega
+
+  chain.Omega = lc_computeOmega(chain.links);
+}
 // Kick: advance velocities (w, h) using forces at current positions (u).
 // Recovers Cartesian positions from chain, computes perturbations,
 // then updates w and h for each link.
@@ -2459,9 +2549,10 @@ int main() {
                  s < hmframe && !bodys.empty() && !WindowShouldClose(); s++) {
               frame++;
 
-              diht = physics::moveHermiteHybridLC(bodys, 150);
+              //physics::moveVerlet(bodys);
+              //diht = physics::moveHermiteHybridLC(bodys, 150);
               //diht = physics::moveRK45LC(bodys, dt, 0.00001, 1 / 30.0);
-              //diht = physics::moveRK45HybridLC(bodys, 150, 0.00001, 1 / 30.0);
+              diht = physics::moveRK45HybridLC(bodys, 150, 0.00001, 1 / 30.0);
               phys_time += diht;
 
               eos(KE, PE, E, bodys);
