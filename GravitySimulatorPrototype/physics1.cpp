@@ -7,6 +7,7 @@
 
 double dt = (1.0f / 120.0f);
 double eps = 0.0f;
+int gridsize = 21;
 
 class Body;
 class vectorP;
@@ -1993,6 +1994,14 @@ int main() {
                  "Body\n4:Run\n5:View\n-----------------\n Choose:";
     std::cin >> operation;
 
+    if (operation == 6)
+    {
+      int gs;
+      std::cout << "GridSize:" ;
+      std::cin >> gs;
+      gridsize = gs;
+    }
+
     if (operation == 1) {
 
       LOG("-----")
@@ -2094,8 +2103,8 @@ int main() {
 
         // Note: movability for sun is set to 'false' so it stays pinned
         auto sun =
-            std::make_unique<Body>(mass_sun, 5.0f, true, pos_sun, vel_sun);
-        auto planet = std::make_unique<Body>(mass_planet, 0.5f, true,
+            std::make_unique<Body>(mass_sun, 9.0f, true, pos_sun, vel_sun);
+        auto planet = std::make_unique<Body>(mass_planet, 0.6f, true,
                                              pos_planet, vel_planet);
 
         bodys.push_back(std::move(sun));
@@ -2126,13 +2135,14 @@ int main() {
         bodys.push_back(std::move(starB));
       }
       if (moga == 5) {
-        vectorP vector(3, 4);
+        vectorP vector0(0, 0);
+        vectorP vector1(3, 4);
         vectorP vector2(6, 8);
         vectorP vector4(2, -2);
 
         auto star =
-            std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector2);
-        auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector, vector4);
+            std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector0);
+        auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector1.negate(), vector4);
 
         bodys.push_back(std::move(star));
         bodys.push_back(std::move(perf));
@@ -2265,40 +2275,45 @@ int main() {
                                   // try to copy a unique_ptr into b
         bodOs.push_back(b ? b->clone() : nullptr);
 
-      std::vector<vectorP> posOs(bodys.size());
+      struct PosRad { vectorP pos; int rad = 0; };
+      std::vector<PosRad> posOs(bodys.size());
 
       for (int i = 0; i < bodys.size(); i++) {
-        posOs[i] = bodys[i]->m_posVec;
+        double tr = bodys[i]->m_radius;
+        posOs[i] = { bodys[i]->m_posVec, (tr == 0.5f) ? 0 : (int)std::round(tr) };
       } // i dont need this becasue of my poor design choices , at start every
         // posOs = 0 and since
       // i check every posOs for every body each posOs is valid because its also
       // checked for 0 wait WTFF,nvm i needed that because what it i dont have a
       // body at 0,0
 
-      std::vector<char> livyur(21, '.');
-      std::vector<std::vector<char>> livyud(21, livyur);
+
+      int gridhalf = (gridsize + 1)/2 ;
+      int gridmidarr = gridhalf - 1;
+      int gridsizearr = gridsize -1;
+
+      std::vector<char> livyur(gridsize, '.');
+      std::vector<std::vector<char>> livyud(gridsize, livyur);
 
       // std::vector<char> livyurc(21, '.');
       // std::vector<std::vector<char>> livyudc(21, livyurc);
-
-      InitWindow(1280, 720, "oto");
-      SetTargetFPS(fps);
+      if (Draw == 1)
+      {
+        InitWindow(1280, 720, "oto");
+        SetTargetFPS(fps);
+      }
 
       Camera3D camera = {0};
-      camera.position = {
-          0.0f, 50.0f, 0.0f}; // directly above the scene, looking straight down
+      camera.position = {0.0f, 50.0f, 0.0f}; // directly above the scene, looking straight down
       camera.target = {0.0f, 0.0f, 0.0f}; // looking down at the origin
-      camera.up = {0.0f, 0.0f,
-                   -1.0f}; // see note below -- this can't be (0,1,0) anymore
-      camera.fovy =
-          40.0f; // now means "view height in world units," not degrees
+      camera.up = {0.0f, 0.0f,-1.0f}; // see note below -- this can't be (0,1,0) anymore
+      camera.fovy = 40.0f; // now means "view height in world units," not degrees
       camera.projection = CAMERA_PERSPECTIVE; // flat 2D-style view, no
                                               // perspective foreshortening
 
-      const Vector3 planeCenter = {0.0f, 0.0f,
-                                   0.0f}; // World-space center of the plane
-      const Vector2 planeSize = {8.0f,
-                                 4.5f}; // Width (X) and length (Z) of the plane
+      const Vector3 planeCenter = {0.0f, 0.0f,0.0f}; // World-space center of the plane
+      const Vector2 planeSize = {8.0f, 4.5f}; // Width (X) and length (Z) of the plane
+
 
       int rerun = 1;
 
@@ -2572,7 +2587,7 @@ int main() {
           double PE;
           double E;
 
-          while (!WindowShouldClose()) {
+          while (Draw == 0 || !WindowShouldClose()) {
 
             bodys.clear();
             bodys.reserve(bodOs.size());
@@ -2597,15 +2612,18 @@ int main() {
                       bodys[i]->m_posVec.round(); // tbpv = temporary bodies
                                                   // postition vector
 
-                  if (tbpv.icap < 0 || tbpv.icap > 20 || tbpv.jcap < 0 ||
-                      tbpv.jcap > 20) {
-                    tbpv = (0, 0); // AHHH ts so goated as its tbps in 0 its
-                                   // ovec is 0 and since
+                  if (tbpv.icap < 0-(gridmidarr) || tbpv.icap > gridmidarr || tbpv.jcap < 0-(gridmidarr) || tbpv.jcap > gridmidarr)
+                  {
+                    tbpv = (0, 0);
+                    // AHHH ts so goated as its tbps in 0 its
+                    // ovec is 0 and since
                     // the coords dont match ovec 0,0 will still be "."
                     // ahahhaahah
                   }
 
-                  posOs[i] = tbpv;
+
+                  double tr = bodys[i]->m_radius;
+                  posOs[i] = { tbpv, (tr == 0.5f) ? 0 : (int)std::round(tr) };
                 }
               }
 
@@ -2634,13 +2652,13 @@ int main() {
                 EndDrawing();
               }
 
-              physics::moveYoshida(bodys);
+              physics::moveVerlet(bodys);
 
-              eos(KE, PE, E, bodys);
+              //eos(KE, PE, E, bodys);
 
               double Edifn = E - ogE;
 
-              LOG("Net Ediffn : " << Edifn);
+              //LOG("Net Ediffn : " << Edifn);
 
               auto colData = (physics::checkCol(bodys, colClusters));
               auto killed = std::move(colData.deadBodies);
@@ -2650,20 +2668,55 @@ int main() {
               if (!killed.empty()) {
                 colPairs.push_back(std::move(killed));
               }
-              if (stat == 0) {
-                for (int i = 0; i < posOs.size(); i++) {
-                  vectorP Ovec = posOs[i];
-                  bool booly = false;
-                  for (int j = 0; j < bodys.size(); j++) {
-                    booly = (Ovec == bodys[j]->m_posVec.round());
-                    if (booly == true) {
+              if (stat == 0)
+              {
+                for (int i = 0; i < posOs.size(); i++)
+                {
+                  vectorP Ovec  = posOs[i].pos;
+                  int     oldRad = posOs[i].rad;
+
+                  // Search for a live body at this slot. Defer all painting
+                  // until after the full search — the old code painted '.'
+                  // inside the loop for every non-matching body before finding
+                  // the match, which carved a bite out of the disk (Pac-Man).
+                  bool found  = false;
+                  int  newRad = 0;
+                  for (int j = 0; j < bodys.size(); j++)
+                  {
+                    if (Ovec == bodys[j]->m_posVec.round())
+                    {
+                      found = true;
+                      double temprad = bodys[j]->m_radius;
+                      newRad = (temprad == 0.5f) ? 0 : (int)std::round(temprad);
                       break;
                     }
                   }
-                  if (booly == false) {
-                    livyud[Ovec.jcap][Ovec.icap] = '.';
-                  } else {
-                    livyud[Ovec.jcap][Ovec.icap] = 'O';
+
+                  if (found)
+                  {
+                    // Paint the full disk 'O' at the current position.
+                    for (int r1 = -newRad; r1 <= newRad; r1++)
+                    for (int r2 = -newRad; r2 <= newRad; r2++)
+                      if (r1*r1 + r2*r2 <= newRad*newRad)
+                      {
+                        int tempj = Ovec.jcap + gridmidarr + r1;
+                        int tempi = Ovec.icap + gridmidarr + r2;
+                        livyud[tempj][tempi] = 'O';
+                      }
+                  }
+                  else
+                  {
+                    // No live body here — erase the disk using the radius it
+                    // had last frame (stored in posOs[i].rad) so the whole
+                    // painted area gets cleared, not just a single cell.
+                    for (int r1 = -oldRad; r1 <= oldRad; r1++)
+                    for (int r2 = -oldRad; r2 <= oldRad; r2++)
+                      if (r1*r1 + r2*r2 <= oldRad*oldRad)
+                      {
+                        int tempj = Ovec.jcap + gridmidarr + r1;
+                        int tempi = Ovec.icap + gridmidarr + r2;
+                        livyud[tempj][tempi] = '.';
+                      }
                   }
                 }
               }
@@ -2701,8 +2754,8 @@ int main() {
             if (rerun == 1) {
               Clusters.clear();
               colPairs.clear();
-              std::vector<char> dots(21, '.');
-              for (int i = 0; i < 21; i++) {
+              std::vector<char> dots(gridsize, '.');
+              for (int i = 0; i < gridsize; i++) {
                 livyud[i] = dots;
               }
             }
@@ -2824,7 +2877,8 @@ int main() {
         } while (rerun == 1);
       }
 
-      CloseWindow();
+      if (Draw == 1)
+        CloseWindow();
 
       drawGrid(livyud);
       LOG("Alive\n--------------")
@@ -2890,7 +2944,7 @@ void eos(double &KE, double &PE, double &E,
 
   LOG("KE:" << KE);
   LOG("PE:" << PE);
-  // LOG("E:" << E);
+  LOG("E:" << E);
 }
 
 void linearP(vectorP &lP, std::vector<std::unique_ptr<Body>> &bodys) {
