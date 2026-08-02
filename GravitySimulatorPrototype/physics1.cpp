@@ -2111,6 +2111,35 @@ int main() {
         bodys.push_back(std::move(planet));
       }
 
+      if (moga == 3) {
+
+        // --- 2. HIGHLY ECCENTRIC ORBIT (STRESS TEST) ---
+        float mass_sun = 100000000000000.0f; // 100 Trillion kg
+        float mass_planet = 1000.0f;         // 1000 kg (negligible)
+
+        // Sun at center, planet starts at "periapsis" (closest approach)
+        vectorP pos_sun2(-100.0f ,10.0f);
+        vectorP pos_sun(0.0f, 0.0f);
+        vectorP pos_planet(10.0f, 0.0f); // 10 units away
+
+        // Sun is stationary. Planet is moving extremely fast on the Y axis
+        vectorP vel_sun(0.0f, 0.0f);
+        vectorP vel_sun2(2.0f,-2.0f);
+        vectorP vel_planet(0.0f, 34.65f); // Eccentricity = 0.8
+
+        // Note: movability for sun is set to 'false' so it stays pinned
+        auto sun =
+          std::make_unique<Body>(mass_sun, 9.0f, true, pos_sun, vel_sun);
+        auto sun2 =
+            std::make_unique<Body>(mass_sun, 9.0f, true, pos_sun2, vel_sun2);
+        auto planet = std::make_unique<Body>(mass_planet, 0.6f, true,
+                                             pos_planet, vel_planet);
+
+        bodys.push_back(std::move(sun));
+        bodys.push_back(std::move(sun2));
+        bodys.push_back(std::move(planet));
+      }
+
       if (moga == 4) {
         // --- 1. PERFECT 2-BODY CIRCULAR ORBIT ---
         // Mass = 1 trillion kg.
