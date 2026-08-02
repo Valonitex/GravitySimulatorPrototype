@@ -2,12 +2,16 @@
 // slop aint bop
 
 #include <filesystem>
+#include <random>
+#include <cmath>
+#include <unistd.h>
+#include <sys/select.h>
 
 #include "EndBrace.h"
 
 double dt = (1.0f / 120.0f);
 double eps = 0.0f;
-int gridsize = 21;
+int gridsize = 201;
 
 class Body;
 class vectorP;
@@ -337,10 +341,10 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
         mergedBody))); // Use the addtobodies vector you already have!
 
     std::vector<Body> clusterSnapshot;
-    LOG("Collisions\n-----------") {
-      LOG("Cluster " << i + 1 << "\n------------ - ")
+    /*LOG("Collisions\n-----------")*/ {
+      //LOG("Cluster " << i + 1 << "\n------------ - ")
       for (int j = 0; j < colClusters[i].size(); j++) {
-        colClusters[i][j]->GetVal();
+        //colClusters[i][j]->GetVal();
         clusterSnapshot.push_back(*colClusters[i][j]);
       }
     }
@@ -1991,7 +1995,7 @@ int main() {
 
   {
     std::cout << "0:Exit\n1:Add Body\n2:Edit Body\n3:Delete "
-                 "Body\n4:Run\n5:View\n-----------------\n Choose:";
+                 "Body\n4:Run\n5:View\n7:Orbit Sandbox\n-----------------\n Choose:";
     std::cin >> operation;
 
     if (operation == 6)
@@ -2108,35 +2112,6 @@ int main() {
                                              pos_planet, vel_planet);
 
         bodys.push_back(std::move(sun));
-        bodys.push_back(std::move(planet));
-      }
-
-      if (moga == 3) {
-
-        // --- 2. HIGHLY ECCENTRIC ORBIT (STRESS TEST) ---
-        float mass_sun = 100000000000000.0f; // 100 Trillion kg
-        float mass_planet = 1000.0f;         // 1000 kg (negligible)
-
-        // Sun at center, planet starts at "periapsis" (closest approach)
-        vectorP pos_sun2(-100.0f ,10.0f);
-        vectorP pos_sun(0.0f, 0.0f);
-        vectorP pos_planet(10.0f, 0.0f); // 10 units away
-
-        // Sun is stationary. Planet is moving extremely fast on the Y axis
-        vectorP vel_sun(0.0f, 0.0f);
-        vectorP vel_sun2(2.0f,-2.0f);
-        vectorP vel_planet(0.0f, 34.65f); // Eccentricity = 0.8
-
-        // Note: movability for sun is set to 'false' so it stays pinned
-        auto sun =
-          std::make_unique<Body>(mass_sun, 9.0f, true, pos_sun, vel_sun);
-        auto sun2 =
-            std::make_unique<Body>(mass_sun, 9.0f, true, pos_sun2, vel_sun2);
-        auto planet = std::make_unique<Body>(mass_planet, 0.6f, true,
-                                             pos_planet, vel_planet);
-
-        bodys.push_back(std::move(sun));
-        bodys.push_back(std::move(sun2));
         bodys.push_back(std::move(planet));
       }
 
@@ -2281,9 +2256,9 @@ int main() {
 
       int stat;
       do {
-        std::cout << "Grid / Raw Data / No data ? (0/1/2) :";
+        std::cout << "Grid / Raw Data / No data / Orbit Sandbox ? (0/1/2/7) :";
         std::cin >> stat;
-      } while (stat < 0 || stat > 5);
+      } while (stat < 0 || (stat > 5 && stat != 7));
 
       int Draw;
       do {
@@ -2293,7 +2268,7 @@ int main() {
       } while (Draw > 1 || Draw < 0);
 
       int fps;
-      if (stat == 0) {
+      if (stat == 0 || stat == 7) {
         std::cout << "Per how many frames ? (calculated at 120fps):";
         std::cin >> fps;
       }
@@ -2643,7 +2618,7 @@ int main() {
 
                   if (tbpv.icap < 0-(gridmidarr) || tbpv.icap > gridmidarr || tbpv.jcap < 0-(gridmidarr) || tbpv.jcap > gridmidarr)
                   {
-                    tbpv = vectorP(0, 0);
+                    tbpv = (0, 0);
                     // AHHH ts so goated as its tbps in 0 its
                     // ovec is 0 and since
                     // the coords dont match ovec 0,0 will still be "."
@@ -2697,9 +2672,6 @@ int main() {
               if (!killed.empty()) {
                 colPairs.push_back(std::move(killed));
               }
-              // Keep posOs in sync with bodys — merges can shrink bodys,
-              // leaving stale slots that the render loop would read past.
-              posOs.resize(bodys.size());
               if (stat == 0)
               {
                 for (int i = 0; i < posOs.size(); i++)
@@ -2733,8 +2705,6 @@ int main() {
                       {
                         int tempj = Ovec.jcap + gridmidarr + r1;
                         int tempi = Ovec.icap + gridmidarr + r2;
-                        if (tempj < 0 || tempj > gridsizearr) continue;
-                        if (tempi < 0 || tempi > gridsizearr) continue;
                         livyud[tempj][tempi] = 'O';
                       }
                   }
@@ -2749,8 +2719,6 @@ int main() {
                       {
                         int tempj = Ovec.jcap + gridmidarr + r1;
                         int tempi = Ovec.icap + gridmidarr + r2;
-                        if (tempj < 0 || tempj > gridsizearr) continue;
-                        if (tempi < 0 || tempi > gridsizearr) continue;
                         livyud[tempj][tempi] = '.';
                       }
                   }
@@ -2799,6 +2767,242 @@ int main() {
 
         } while (rerun == 1);
       }
+
+      if (stat == 7) {
+
+        // ----------------------------------------------------------------
+        // ORBIT SANDBOX
+        // Star sits at origin, small bodies spawn continuously at a chosen
+        // distance with configurable velocity.  Runs forever
+        // (Ctrl-C or 'q' + Enter to quit).  Grid-only display, no raylib.
+        // ----------------------------------------------------------------
+
+        const double STAR_MASS   = 1e12;
+        const double STAR_RADIUS = 5.0;
+
+        // Ask for the body cap before entering the loop
+        int bodyCap;
+        std::cout << "Max simultaneous small bodies : ";
+        std::cin >> bodyCap;
+        if (bodyCap < 1) bodyCap = 1;
+
+        double smallMass;
+        std::cout << "Small body mass : ";
+        std::cin >> smallMass;
+        if (smallMass <= 0) smallMass = 1e6;
+
+        double smallRadius;
+        std::cout << "Small body radius (e.g. 0.5) : ";
+        std::cin >> smallRadius;
+        if (smallRadius <= 0) smallRadius = 0.5;
+
+        // Approximate orbit distance (centre of spawn band)
+        double orbitDist;
+        std::cout << "Approximate orbit distance from star (units) : ";
+        std::cin >> orbitDist;
+        if (orbitDist < STAR_RADIUS + 1.0) orbitDist = STAR_RADIUS + 1.0;
+
+        // Velocity scale: 1.0 = perfect circular orbit,
+        //   <1 = inward spiral / ellipse, >1 = outward / escape
+        double velScale;
+        std::cout << "Velocity scale (1.0 = circular orbit, <1 slower, >1 faster) : ";
+        std::cin >> velScale;
+        if (velScale <= 0) velScale = 1.0;
+
+        // Derive gridsize so the orbit fits with ~10 units of buffer on each side.
+        // gridsize must be odd so the centre cell aligns with (0,0).
+        {
+            int needed = 2 * (int)std::ceil(orbitDist) + 20 + 1; // +20 = 10 each side
+            if (needed % 2 == 0) needed++;                        // force odd
+            gridsize = needed;
+        }
+        LOG("gridsize set to " << gridsize << " to fit orbit distance " << orbitDist);
+
+        // Clear whatever the user had in bodys and put just the star in
+        bodys.clear();
+        bodys.push_back(std::make_unique<Body>(
+            STAR_MASS, STAR_RADIUS,
+            false,               // immovable
+            vectorP(0.0, 0.0),
+            vectorP(0.0, 0.0)));
+
+        // Grid setup — computed after gridsize is set above
+        int gridhalf7    = (gridsize + 1) / 2;
+        int gridmidarr7  = gridhalf7 - 1;
+        int gridsizearr7 = gridsize - 1;
+
+        std::vector<char> livyur7(gridsize, '.');
+        std::vector<std::vector<char>> livyud7(gridsize, livyur7);
+
+        // posOs for the sandbox — grows/shrinks with bodys
+        struct PosRad7 { vectorP pos; int rad = 0; };
+        auto makePR7 = [](const std::unique_ptr<Body> &b) -> PosRad7 {
+            double tr = b->m_radius;
+            return { b->m_posVec, (tr == 0.5) ? 0 : (int)std::round(tr) };
+        };
+
+        std::vector<PosRad7> posOs7(bodys.size());
+        for (int i = 0; i < (int)bodys.size(); i++)
+            posOs7[i] = makePR7(bodys[i]);
+
+        // RNG — spawn band is ±10% around the chosen orbit distance
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<double> angleDist(0.0, 2.0 * M_PI);
+        std::uniform_real_distribution<double> radiusDist(orbitDist * 0.9,
+                                                          orbitDist * 1.1);
+
+        auto spawnBody = [&]() {
+            double angle   = angleDist(rng);
+            double spawnR  = radiusDist(rng);
+
+            // Position on a circle of radius spawnR
+            double px = spawnR * std::cos(angle);
+            double py = spawnR * std::sin(angle);
+
+            // Circular-orbit speed at this radius, scaled by velScale
+            double vcirc = std::sqrt(physics::G * STAR_MASS / spawnR) * velScale;
+
+            // Perpendicular direction — randomise CW vs CCW
+            double sign = (rng() & 1) ? 1.0 : -1.0;
+            double vx = -sign * std::sin(angle) * vcirc;
+            double vy =  sign * std::cos(angle) * vcirc;
+
+            bodys.push_back(std::make_unique<Body>(
+                smallMass, smallRadius,
+                true,
+                vectorP(px, py),
+                vectorP(vx, vy)));
+
+            posOs7.push_back(makePR7(bodys.back()));
+        };
+
+        // Fill up to cap immediately
+        for (int i = 0; i < bodyCap; i++)
+            spawnBody();
+
+        auto dt_dur7 = std::chrono::duration_cast<clock::duration>(
+            std::chrono::duration<double>(dt));
+
+        int frame7 = 0;
+        auto nextFrame7 = clock::now();
+
+        bool quit7 = false;
+        while (!quit7)
+        {
+            // --- Snapshot positions before physics (for grid update) ---
+            for (int i = 0; i < (int)bodys.size(); i++) {
+                if (i >= (int)posOs7.size()) posOs7.resize(bodys.size());
+                vectorP tbpv = bodys[i]->m_posVec.round();
+                if (tbpv.icap < -gridmidarr7 || tbpv.icap > gridmidarr7 ||
+                    tbpv.jcap < -gridmidarr7 || tbpv.jcap > gridmidarr7)
+                    tbpv = vectorP(0, 0);
+                double tr = bodys[i]->m_radius;
+                posOs7[i] = { tbpv, (tr == 0.5) ? 0 : (int)std::round(tr) };
+            }
+
+            // --- Physics step ---
+            physics::moveVerlet(bodys);
+            frame7++;
+
+            // --- Collision detection ---
+            auto colData7 = physics::checkCol(bodys, colClusters);
+            auto killed7  = std::move(colData7.deadBodies);
+            auto newClusters7 = std::move(colData7.clusters);
+            for (auto &c : newClusters7) Clusters.push_back(std::move(c));
+            if (!killed7.empty())        colPairs.push_back(std::move(killed7));
+
+            // Sync posOs7 size after merges
+            posOs7.resize(bodys.size());
+
+            // --- Spawn to maintain cap (star is body[0], doesn't count) ---
+            int liveSmall = (int)bodys.size() - 1; // subtract the star
+            while (liveSmall < bodyCap) {
+                spawnBody();
+                liveSmall++;
+            }
+
+            // --- Grid render ---
+            for (int i = 0; i < (int)posOs7.size(); i++)
+            {
+                vectorP Ovec   = posOs7[i].pos;
+                int     oldRad = posOs7[i].rad;
+
+                bool found  = false;
+                int  newRad = 0;
+                for (int j = 0; j < (int)bodys.size(); j++)
+                {
+                    if (Ovec == bodys[j]->m_posVec.round())
+                    {
+                        found = true;
+                        double tr = bodys[j]->m_radius;
+                        newRad = (tr == 0.5) ? 0 : (int)std::round(tr);
+                        break;
+                    }
+                }
+
+                if (found)
+                {
+                    for (int r1 = -newRad; r1 <= newRad; r1++)
+                    for (int r2 = -newRad; r2 <= newRad; r2++)
+                        if (r1*r1 + r2*r2 <= newRad*newRad)
+                        {
+                            int tj = (int)Ovec.jcap + gridmidarr7 + r1;
+                            int ti = (int)Ovec.icap + gridmidarr7 + r2;
+                            if (tj < 0 || tj > gridsizearr7) continue;
+                            if (ti < 0 || ti > gridsizearr7) continue;
+                            livyud7[tj][ti] = 'O';
+                        }
+                }
+                else
+                {
+                    for (int r1 = -oldRad; r1 <= oldRad; r1++)
+                    for (int r2 = -oldRad; r2 <= oldRad; r2++)
+                        if (r1*r1 + r2*r2 <= oldRad*oldRad)
+                        {
+                            int tj = (int)Ovec.jcap + gridmidarr7 + r1;
+                            int ti = (int)Ovec.icap + gridmidarr7 + r2;
+                            if (tj < 0 || tj > gridsizearr7) continue;
+                            if (ti < 0 || ti > gridsizearr7) continue;
+                            livyud7[tj][ti] = '.';
+                        }
+                }
+            }
+
+            // --- Print grid at requested frame interval ---
+            if (frame7 % int((1.0 / dt) / fps) == 0)
+            {
+                drawGrid(livyud7);
+                /*LOG("frame=" << frame7
+                    << "  bodies=" << (bodys.size() - 1)
+                    << "  (q+Enter to quit)");*/
+                LOG("----------------------------");
+
+                // Non-blocking quit check: peek at stdin
+                // On Linux a line in stdin = user typed something
+                // Use select with 0 timeout so we never block the sim
+                fd_set fds;
+                FD_ZERO(&fds);
+                FD_SET(STDIN_FILENO, &fds);
+                struct timeval tv = {0, 0};
+                if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0)
+                {
+                    std::string line;
+                    std::getline(std::cin, line);
+                    if (line == "q" || line == "Q")
+                        quit7 = true;
+                }
+            }
+
+            nextFrame7 += dt_dur7;
+            std::this_thread::sleep_until(nextFrame7);
+        }
+
+        // Clean up — restore just the star so main menu doesn't explode
+        bodys.clear();
+        bodys.push_back(std::make_unique<Body>(
+            STAR_MASS, STAR_RADIUS, false,
+            vectorP(0.0, 0.0), vectorP(0.0, 0.0)));
+      } // end stat == 7
 
       if (stat == 2) {
         double KE;
