@@ -304,8 +304,28 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
   for (int i = 0; i < colClusters.size(); i++) {
     if (colClusters[i].empty())
       continue;
-    // Body boda = (*(colClusters[i][0])); not needed in new version starts from
-    // zezro
+
+    // If any body in this cluster is immovable (e.g. the star), don't merge.
+    // Just kill every other body in the cluster and leave the immovable one
+    // exactly as it is: same mass, position, velocity, everything.
+    bool hasImmovable = false;
+    for (int k = 0; k < (int)colClusters[i].size(); k++) {
+      if (!colClusters[i][k]->movability) { hasImmovable = true; break; }
+    }
+    if (hasImmovable) {
+      for (int k = 0; k < (int)colClusters[i].size(); k++) {
+        Body &b = *(colClusters[i][k]);
+        if (b.movability)
+          b.dead = true;       // kill the small body
+        else
+          b.clusterIndex = 0;  // un-tag the star so it isn't swept up as dead
+      }
+      std::vector<Body> clusterSnapshot;
+      for (int j = 0; j < (int)colClusters[i].size(); j++)
+        clusterSnapshot.push_back(*colClusters[i][j]);
+      tempClusters.push_back(clusterSnapshot);
+      continue;
+    }
 
     float totalMass = 0.0f;
     vectorP wPos = vectorP(0, 0);
@@ -2619,7 +2639,7 @@ int main() {
 
                   if (tbpv.icap < 0-(gridmidarr) || tbpv.icap > gridmidarr || tbpv.jcap < 0-(gridmidarr) || tbpv.jcap > gridmidarr)
                   {
-                    tbpv = (0, 0);
+                    tbpv = vectorP(0, 0);
                     // AHHH ts so goated as its tbps in 0 its
                     // ovec is 0 and since
                     // the coords dont match ovec 0,0 will still be "."
@@ -2673,6 +2693,9 @@ int main() {
               if (!killed.empty()) {
                 colPairs.push_back(std::move(killed));
               }
+              // Keep posOs in sync — merges can shrink bodys, leaving stale
+              // slots that the render loop would read past.
+              posOs.resize(bodys.size());
               if (stat == 0)
               {
                 for (int i = 0; i < posOs.size(); i++)
@@ -2706,6 +2729,8 @@ int main() {
                       {
                         int tempj = Ovec.jcap + gridmidarr + r1;
                         int tempi = Ovec.icap + gridmidarr + r2;
+                        if (tempj < 0 || tempj > gridsizearr) continue;
+                        if (tempi < 0 || tempi > gridsizearr) continue;
                         livyud[tempj][tempi] = 'O';
                       }
                   }
@@ -2720,6 +2745,8 @@ int main() {
                       {
                         int tempj = Ovec.jcap + gridmidarr + r1;
                         int tempi = Ovec.icap + gridmidarr + r2;
+                        if (tempj < 0 || tempj > gridsizearr) continue;
+                        if (tempi < 0 || tempi > gridsizearr) continue;
                         livyud[tempj][tempi] = '.';
                       }
                   }
@@ -2905,15 +2932,62 @@ int main() {
             physics::moveVerlet(bodys);
             frame7++;
 
+            // Hard-pin the star (body[0]) after every step.
+            // movability=false already blocks velocity integration, but
+            // floating-point force accumulation from many bodies can nudge it.
+            bodys[0]->m_posVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_velVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_accVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_forVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_forRes  = vectorP(0.0, 0.0);
+
             // --- Collision detection ---
             auto colData7 = physics::checkCol(bodys, colClusters);
             auto killed7  = std::move(colData7.deadBodies);
             auto newClusters7 = std::move(colData7.clusters);
             for (auto &c : newClusters7) Clusters.push_back(std::move(c));
+
+            // Pin again after collision detection (checkCol tags bodies via
+            // clusterIndex; the immovable-cluster fix handles this, but an
+            // extra pin guarantees nothing slipped through).
+            bodys[0]->m_posVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_velVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_accVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_forVec  = vectorP(0.0, 0.0);
+            bodys[0]->m_forRes  = vectorP(0.0, 0.0);
             if (!killed7.empty())        colPairs.push_back(std::move(killed7));
 
             // Sync posOs7 size after merges
             posOs7.resize(bodys.size());
+
+            // --- Kill bodies that have left the grid ---
+            // Skip body[0] (the star). Iterate back-to-front so erasing an
+            // element doesn't shift the indices of elements yet to be checked.
+            for (int i = (int)bodys.size() - 1; i >= 1; i--) {
+                vectorP p = bodys[i]->m_posVec.round();
+                if (p.icap < -gridmidarr7 || p.icap > gridmidarr7 ||
+                    p.jcap < -gridmidarr7 || p.jcap > gridmidarr7)
+                {
+                    // Clear the last grid cell this body occupied before
+                    // removing it — otherwise the render loop never sees the
+                    // slot again and the 'O' stays painted permanently.
+                    vectorP last = posOs7[i].pos;
+                    int     lastRad = posOs7[i].rad;
+                    for (int r1 = -lastRad; r1 <= lastRad; r1++)
+                    for (int r2 = -lastRad; r2 <= lastRad; r2++)
+                        if (r1*r1 + r2*r2 <= lastRad*lastRad)
+                        {
+                            int tj = (int)last.jcap + gridmidarr7 + r1;
+                            int ti = (int)last.icap + gridmidarr7 + r2;
+                            if (tj < 0 || tj > gridsizearr7) continue;
+                            if (ti < 0 || ti > gridsizearr7) continue;
+                            livyud7[tj][ti] = '.';
+                        }
+
+                    bodys.erase(bodys.begin() + i);
+                    posOs7.erase(posOs7.begin() + i);
+                }
+            }
 
             // --- Spawn to maintain cap (star is body[0], doesn't count) ---
             int liveSmall = (int)bodys.size() - 1; // subtract the star
