@@ -1,12 +1,12 @@
 // hi
 // slop aint bop
-//g
+// g
 
+#include <cmath>
 #include <filesystem>
 #include <random>
-#include <cmath>
-#include <unistd.h>
 #include <sys/select.h>
+#include <unistd.h>
 
 #include "EndBrace.h"
 
@@ -14,8 +14,48 @@ double dt = (1.0f / 120.0f);
 double eps = 0.0f;
 int gridsize = 201;
 
-class Body;
+// ═══════════════════════════════════════════════════════════════════════════
+// KAHAN COMPENSATED SUMMATION HELPERS
+// ─────────────────────────────────────────────────────────────────────────
+// Standard floating-point accumulation loses low-order bits on every
+// addition (|a| >> |b| → b disappears into the rounding gap).  In a
+// long-running N-body simulation this causes energy/momentum drift that
+// compounds with every timestep.
+//
+// Kahan summation fixes this by maintaining a compensation variable that
+// captures the rounding error from each step and feeds it back on the
+// next.  Net cost: 4 flops per addition instead of 1 — negligible next
+// to the O(N²) gravity evaluation.
+//
+//  KahanSum  — scalar compensated accumulator
+//  KahanVec2 — 2-D vector accumulator (independent x/y compensation)
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct KahanSum {
+  double sum  = 0.0;
+  double comp = 0.0;  // running compensation for lost low-order bits
+
+  void add(double val) {
+    double y = val - comp;    // correct for the previous rounding error
+    double t = sum + y;
+    comp = (t - sum) - y;     // capture new rounding error
+    sum  = t;
+  }
+  void sub(double val) { add(-val); }
+  double result() const { return sum; }
+};
+
+// KahanVec2 is declared here but its methods are defined after vectorP.
 class vectorP;
+struct KahanVec2 {
+  KahanSum x, y;
+  inline void add(const vectorP &v);
+  inline void sub(const vectorP &v);
+  inline void addScaled(const vectorP &v, double s);
+  inline vectorP result() const;
+};
+
+class Body;
 void eos(double &KE, double &PE, double &E,
          std::vector<std::unique_ptr<Body>> &bodys);
 void linearP(vectorP &lP, std::vector<std::unique_ptr<Body>> &bodys);
@@ -127,6 +167,14 @@ std::ostream &operator<<(std::ostream &stream, const vectorP &other) {
   stream << other.icap << "," << other.jcap;
   return stream;
 }
+
+// ── KahanVec2 method implementations (deferred until vectorP is complete) ──
+inline void KahanVec2::add(const vectorP &v) { x.add(v.icap); y.add(v.jcap); }
+inline void KahanVec2::sub(const vectorP &v) { x.sub(v.icap); y.sub(v.jcap); }
+inline void KahanVec2::addScaled(const vectorP &v, double s) {
+  x.add(v.icap * s); y.add(v.jcap * s);
+}
+inline vectorP KahanVec2::result() const { return vectorP(x.result(), y.result()); }
 
 class Body {
 public:
@@ -310,15 +358,18 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
     // exactly as it is: same mass, position, velocity, everything.
     bool hasImmovable = false;
     for (int k = 0; k < (int)colClusters[i].size(); k++) {
-      if (!colClusters[i][k]->movability) { hasImmovable = true; break; }
+      if (!colClusters[i][k]->movability) {
+        hasImmovable = true;
+        break;
+      }
     }
     if (hasImmovable) {
       for (int k = 0; k < (int)colClusters[i].size(); k++) {
         Body &b = *(colClusters[i][k]);
         if (b.movability)
-          b.dead = true;       // kill the small body
+          b.dead = true; // kill the small body
         else
-          b.clusterIndex = 0;  // un-tag the star so it isn't swept up as dead
+          b.clusterIndex = 0; // un-tag the star so it isn't swept up as dead
       }
       std::vector<Body> clusterSnapshot;
       for (int j = 0; j < (int)colClusters[i].size(); j++)
@@ -327,22 +378,25 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
       continue;
     }
 
-    double totalMass = 0.0f;
-    vectorP wPos = vectorP(0, 0);
-    vectorP wVel = vectorP(0, 0);
-    vectorP totalForce = vectorP(0, 0);
-    double totalVol = 0.0;
+    // Kahan accumulators: cluster merges can involve bodies with very
+    // different masses/volumes, so naive += would lose small contributions.
+    KahanSum totalMassK, totalVolK;
+    KahanVec2 wPosK, wVelK, totalForceK;
 
     for (int k = 0; k < colClusters[i].size(); k++) {
       Body &b = *(colClusters[i][k]);
-      totalMass += b.m_Mass;
-      wPos += b.m_posVec * b.m_Mass;
-      wVel += b.m_velVec * b.m_Mass;
-      totalForce += b.m_forVec; // force isnt averages as its a vector and
-                                // vectors are additive
-      totalVol += b.m_radius * b.m_radius * b.m_radius;
+      totalMassK.add(b.m_Mass);
+      wPosK.addScaled(b.m_posVec, b.m_Mass);
+      wVelK.addScaled(b.m_velVec, b.m_Mass);
+      totalForceK.add(b.m_forVec); // forces are additive vectors
+      totalVolK.add(b.m_radius * b.m_radius * b.m_radius);
       b.dead = true;
     }
+    double totalMass  = totalMassK.result();
+    double totalVol   = totalVolK.result();
+    vectorP wPos      = wPosK.result();
+    vectorP wVel      = wVelK.result();
+    vectorP totalForce = totalForceK.result();
 
     Body mergedBody = *(colClusters[i][0]);
     mergedBody.m_Mass = totalMass;
@@ -363,9 +417,9 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
 
     std::vector<Body> clusterSnapshot;
     /*LOG("Collisions\n-----------")*/ {
-      //LOG("Cluster " << i + 1 << "\n------------ - ")
+      // LOG("Cluster " << i + 1 << "\n------------ - ")
       for (int j = 0; j < colClusters[i].size(); j++) {
-        //colClusters[i][j]->GetVal();
+        // colClusters[i][j]->GetVal();
         clusterSnapshot.push_back(*colClusters[i][j]);
       }
     }
@@ -396,38 +450,58 @@ struct CollisionResult checkCol(std::vector<std::unique_ptr<Body>> &bodies,
 }
 
 void resolve(std::vector<std::unique_ptr<Body>> &bodies) {
+  // Kahan accumulation for force: each body receives N-1 pairwise force
+  // contributions via forsum(). With many bodies or extreme mass ratios,
+  // small forces are lost when added naively to a large accumulator.
+  // We clear forRes first, then let pull()/forsum() accumulate normally;
+  // the per-body Kahan accumulation is embedded in the forsum loop below.
   int s = bodies.size();
+
+  // Reset force accumulators and prepare Kahan state per body
+  std::vector<KahanVec2> forAcc(s);
+  for (int i = 0; i < s; i++)
+    bodies[i]->m_forRes = vectorP(0.0, 0.0);
+
+  // Pairwise force accumulation with per-body Kahan compensation
   for (int i = 0; i < (s - 1); i++) {
     auto &bodya = *bodies[i];
-    for (int j = i + 1; j < bodies.size(); j++) {
-      physics::pull(bodya, *(bodies[j]));
+    for (int j = i + 1; j < s; j++) {
+      // Compute the pairwise pull force
+      vectorP disp = physics::displacement(bodya, *bodies[j]);
+      double distSq  = disp.magSq() + eps * eps;
+      double invdist = 1.0 / std::sqrt(distSq);
+      double denom   = invdist * invdist * invdist;
+      vectorP pullvec = disp * (physics::G * bodya.m_Mass * bodies[j]->m_Mass * denom);
+
+      forAcc[j].add(pullvec);          // body j receives +pull
+      forAcc[i].sub(pullvec);          // body i receives -pull (Newton 3rd)
     }
-    bodies[i]->updateVal();
   }
 
-  bodies[s - 1]->updateVal();
+  // Commit compensated results and finalize acc/forVec
+  for (int i = 0; i < s; i++) {
+    bodies[i]->m_forRes = forAcc[i].result();
+    bodies[i]->updateVal();
+  }
 }
 
-void moveVerlet(std::vector<std::unique_ptr<Body>> &bodies)
-{
+void moveVerlet(std::vector<std::unique_ptr<Body>> &bodies) {
   resolve(bodies);
   int s = bodies.size();
   std::vector<vectorP> oldacc(s);
   double dtb2 = dt / 2;
   double dt2b2 = dt * dtb2;
   for (int i = 0; i < s; i++) {
-    if (bodies[i]->movability != false)
-    {
+    if (bodies[i]->movability != false) {
       vectorP temp = bodies[i]->m_accVec;
-      bodies[i]->m_posVec += /*bodies[i]->m_posVec*/ bodies[i]->m_velVec * dt + (temp * dt2b2);
+      bodies[i]->m_posVec +=
+          /*bodies[i]->m_posVec*/ bodies[i]->m_velVec * dt + (temp * dt2b2);
       oldacc[i] = temp;
     }
   }
   resolve(bodies);
-  for (int i = 0; i < s; i++)
-  {
-    if (bodies[i]->movability != false)
-    {
+  for (int i = 0; i < s; i++) {
+    if (bodies[i]->movability != false) {
       bodies[i]->m_velVec += (oldacc[i] + bodies[i]->m_accVec) * dtb2;
     }
   }
@@ -472,13 +546,11 @@ void moveYoshida(std::vector<std::unique_ptr<Body>> &bodies) {
 // current positions/velocities
 void resolveWithJerk(std::vector<std::unique_ptr<Body>> &bodies) {
   int s = bodies.size();
-  // double eps = 0.1; // Softening factor to match your pull() function
 
-  // Reset accelerations and jerks
-  for (int i = 0; i < s; i++) {
-    bodies[i]->m_accVec = vectorP(0, 0);
-    bodies[i]->m_jerkVec = vectorP(0, 0);
-  }
+  // Kahan accumulators for acceleration and jerk per body.
+  // Each body accumulates N-1 pairwise contributions; with large N or
+  // extreme mass ratios, naive += loses small terms to rounding.
+  std::vector<KahanVec2> accAcc(s), jerkAcc(s);
 
   // Pairwise N-Body force & jerk calculation
   for (int i = 0; i < s; i++) {
@@ -496,23 +568,27 @@ void resolveWithJerk(std::vector<std::unique_ptr<Body>> &bodies) {
       double g_mj = physics::G * bodies[j]->m_Mass;
       double g_mi = physics::G * bodies[i]->m_Mass;
 
+      // jerkTerm = v/r³ − r·(3·(v·r)/r⁵)
+      vectorP jerkTerm = (v * (1.0 / r3)) - r * (3.0 * v_dot_r / r5);
+
       if (bodies[i]->movability) {
-        bodies[i]->m_accVec += r * (g_mj / r3);
-        bodies[i]->m_jerkVec +=
-            (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mj;
+        accAcc[i].addScaled(r, g_mj / r3);
+        jerkAcc[i].addScaled(jerkTerm, g_mj);
       }
 
       if (bodies[j]->movability) {
-        bodies[j]->m_accVec -= r * (g_mi / r3);
-        bodies[j]->m_jerkVec -=
-            (v * (1.0 / r3) - r * (3.0 * v_dot_r / r5)) * g_mi;
+        accAcc[j].addScaled(r, -g_mi / r3);
+        jerkAcc[j].addScaled(jerkTerm, -g_mi);
       }
     }
   }
 
-  // Keep m_forVec updated so collision checks and UI display stay synced!
+  // Commit compensated results
   for (int i = 0; i < s; i++) {
-    bodies[i]->m_forVec = bodies[i]->m_accVec * bodies[i]->m_Mass;
+    bodies[i]->m_accVec  = accAcc[i].result();
+    bodies[i]->m_jerkVec = jerkAcc[i].result();
+    // Keep m_forVec updated so collision checks and UI display stay synced!
+    bodies[i]->m_forVec  = bodies[i]->m_accVec * bodies[i]->m_Mass;
   }
 }
 
@@ -602,10 +678,12 @@ void computeAccRK(const std::vector<std::unique_ptr<Body>> &bodies,
                   const std::vector<vectorP> &pos,
                   std::vector<vectorP> &out_acc) {
   const int n = static_cast<int>(bodies.size());
-  // const double eps = 0.1;   // same softening ε as pull()
 
-  for (int i = 0; i < n; i++)
-    out_acc[i] = vectorP(0.0, 0.0);
+  // Kahan accumulators for RK acceleration.
+  // computeAccRK is called 7× per accepted RK45 step; each call sums
+  // N-1 pairwise gravity terms.  With many bodies, small contributions
+  // to heavy bodies are lost without compensation.
+  std::vector<KahanVec2> acc(n);
 
   for (int i = 0; i < n; i++) {
     for (int j = i + 1; j < n; j++) {
@@ -616,13 +694,16 @@ void computeAccRK(const std::vector<std::unique_ptr<Body>> &bodies,
 
       // a_i += G·mj·r / r³
       if (bodies[i]->movability)
-        out_acc[i] += r * (G * bodies[j]->m_Mass / r3);
+        acc[i].addScaled(r, G * bodies[j]->m_Mass / r3);
 
       // a_j -= G·mi·r / r³  (Newton's 3rd: direction flips)
       if (bodies[j]->movability)
-        out_acc[j] -= r * (G * bodies[i]->m_Mass / r3);
+        acc[j].addScaled(r, -G * bodies[i]->m_Mass / r3);
     }
   }
+
+  for (int i = 0; i < n; i++)
+    out_acc[i] = acc[i].result();
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -995,12 +1076,16 @@ static inline double lc_bindingEnergy(const vectorP &Xdot, double r,
 static double lc_computeOmega(const std::vector<LCLink> &links) {
   if (links.empty())
     return 1.0;
-  double S = 0.0;
+  // Kahan summation for Ω = (Σ 1/r_k)⁻¹.
+  // Near close encounters one link can have r_k → 0, making 1/r_k huge
+  // relative to the other terms.  Naive summation then loses the regular
+  // links entirely, distorting the Sundman time transformation.
+  KahanSum S;
   for (const auto &lk : links) {
     double rk = vMagSq(lk.u);
-    S += 1.0 / std::max(rk, 1e-30);
+    S.add(1.0 / std::max(rk, 1e-30));
   }
-  return 1.0 / std::max(S, 1e-30);
+  return 1.0 / std::max(S.result(), 1e-30);
 }
 
 // ── Chain construction (nearest-neighbor) ────────────────────────────────
@@ -1024,14 +1109,20 @@ lc_buildChain(const std::vector<std::unique_ptr<Body>> &bodies) {
   }
 
   // ── Center of mass ──────────────────────────────────────────────
-  double M = 0.0;
-  vectorP wPos(0, 0), wVel(0, 0);
+  // Kahan accumulation: with N bodies spanning many orders of mass, the
+  // small-mass bodies' contributions to wPos/wVel are lost without
+  // compensation.  A wrong CoM shifts every reconstructed position.
+  KahanSum Mk;
+  KahanVec2 wPosK, wVelK;
   for (int i = 0; i < N; i++) {
-    M += bodies[i]->m_Mass;
-    wPos = vAdd(wPos, vScale(bodies[i]->m_posVec, bodies[i]->m_Mass));
-    wVel = vAdd(wVel, vScale(bodies[i]->m_velVec, bodies[i]->m_Mass));
+    Mk.add(bodies[i]->m_Mass);
+    wPosK.addScaled(bodies[i]->m_posVec, bodies[i]->m_Mass);
+    wVelK.addScaled(bodies[i]->m_velVec, bodies[i]->m_Mass);
   }
-  chain.R = vScale(wPos, 1.0 / M);
+  double M = Mk.result();
+  vectorP wPos = wPosK.result();
+  vectorP wVel = wVelK.result();
+  chain.R    = vScale(wPos, 1.0 / M);
   chain.V_cm = vScale(wVel, 1.0 / M);
 
   if (N == 1) {
@@ -1157,23 +1248,30 @@ lc_chainToPositions(const ChainState &chain,
     X[k] = lc_uToCart(chain.links[k].u);
 
   if (pinned_idx == -1) {
-    double M = 0.0;
+    // Kahan for mass and offset: the position of body σ(0) is derived from
+    // R − (1/M)·Σ tailMass·X_k.  Errors here shift ALL body positions
+    // coherently, so compensated summation matters even for modest N.
+    KahanSum Mk;
     for (int i = 0; i < N; i++)
-      M += bodies[chain.sigma[i]]->m_Mass;
+      Mk.add(bodies[chain.sigma[i]]->m_Mass);
+    double M = Mk.result();
 
-    vectorP offset(0.0, 0.0);
+    KahanVec2 offsetK;
     for (int k = 0; k < nLinks; k++) {
-      double tailMass = 0.0;
+      KahanSum tailK;
       for (int j = k + 1; j < N; j++)
-        tailMass += bodies[chain.sigma[j]]->m_Mass;
-      offset = vAdd(offset, vScale(X[k], tailMass));
+        tailK.add(bodies[chain.sigma[j]]->m_Mass);
+      offsetK.addScaled(X[k], tailK.result());
     }
-    pos[chain.sigma[0]] = vSub(chain.R, vScale(offset, 1.0 / M));
+    pos[chain.sigma[0]] = vSub(chain.R, vScale(offsetK.result(), 1.0 / M));
 
-    vectorP cumX = pos[chain.sigma[0]];
+    // Kahan walk along the chain: cumulative sum of chain vectors.
+    // Errors here would shift each body by a different amount.
+    KahanVec2 cumK;
+    cumK.add(pos[chain.sigma[0]]);
     for (int k = 0; k < nLinks; k++) {
-      cumX = vAdd(cumX, X[k]);
-      pos[chain.sigma[k + 1]] = cumX;
+      cumK.add(X[k]);
+      pos[chain.sigma[k + 1]] = cumK.result();
     }
   } else {
     pos[chain.sigma[pinned_idx]] = bodies[chain.sigma[pinned_idx]]->m_posVec;
@@ -1218,23 +1316,28 @@ lc_chainToVelocities(const ChainState &chain,
     Xdot[k] = lc_wToVel(chain.links[k].u, chain.links[k].w);
 
   if (pinned_idx == -1) {
-    double M = 0.0;
+    // Identical structure to position recovery — same rationale for
+    // Kahan summation: errors in velocity of σ(0) propagate to all bodies.
+    KahanSum Mk;
     for (int i = 0; i < N; i++)
-      M += bodies[chain.sigma[i]]->m_Mass;
+      Mk.add(bodies[chain.sigma[i]]->m_Mass);
+    double M = Mk.result();
 
-    vectorP velOffset(0.0, 0.0);
+    KahanVec2 velOffsetK;
     for (int k = 0; k < nLinks; k++) {
-      double tailMass = 0.0;
+      KahanSum tailK;
       for (int j = k + 1; j < N; j++)
-        tailMass += bodies[chain.sigma[j]]->m_Mass;
-      velOffset = vAdd(velOffset, vScale(Xdot[k], tailMass));
+        tailK.add(bodies[chain.sigma[j]]->m_Mass);
+      velOffsetK.addScaled(Xdot[k], tailK.result());
     }
-    vel[chain.sigma[0]] = vSub(chain.V_cm, vScale(velOffset, 1.0 / M));
+    vel[chain.sigma[0]] = vSub(chain.V_cm, vScale(velOffsetK.result(), 1.0 / M));
 
-    vectorP cumV = vel[chain.sigma[0]];
+    // Kahan walk along the chain for velocities.
+    KahanVec2 cumVK;
+    cumVK.add(vel[chain.sigma[0]]);
     for (int k = 0; k < nLinks; k++) {
-      cumV = vAdd(cumV, Xdot[k]);
-      vel[chain.sigma[k + 1]] = cumV;
+      cumVK.add(Xdot[k]);
+      vel[chain.sigma[k + 1]] = cumVK.result();
     }
   } else {
     vel[chain.sigma[pinned_idx]] = vectorP(0.0, 0.0);
@@ -1304,7 +1407,12 @@ static vectorP lc_perturbation(const ChainState &chain,
   int sj = chain.sigma[k + 1];
   int N = chain.N;
 
-  vectorP a_si_pert(0.0, 0.0);
+  // Kahan accumulation for perturbation accelerations.
+  // lc_perturbation sums O(N-2) gravitational terms from non-chain bodies.
+  // Near close encounters, the chain pair dominates and the remaining
+  // perturbers span many orders of magnitude — exactly where naive
+  // summation loses precision.
+  KahanVec2 a_si_pertK;
   if (bodies[si]->movability) {
     for (int b = 0; b < N; b++) {
       if (b == si || b == sj)
@@ -1315,11 +1423,11 @@ static vectorP lc_perturbation(const ChainState &chain,
       if (d2_si < 1e-30)
         continue;
       double d3_si = d2_si * std::sqrt(d2_si);
-      a_si_pert = vAdd(a_si_pert, vScale(r_b_si, G * mb / d3_si));
+      a_si_pertK.addScaled(r_b_si, G * mb / d3_si);
     }
   }
 
-  vectorP a_sj_pert(0.0, 0.0);
+  KahanVec2 a_sj_pertK;
   if (bodies[sj]->movability) {
     for (int b = 0; b < N; b++) {
       if (b == si || b == sj)
@@ -1330,11 +1438,11 @@ static vectorP lc_perturbation(const ChainState &chain,
       if (d2_sj < 1e-30)
         continue;
       double d3_sj = d2_sj * std::sqrt(d2_sj);
-      a_sj_pert = vAdd(a_sj_pert, vScale(r_b_sj, G * mb / d3_sj));
+      a_sj_pertK.addScaled(r_b_sj, G * mb / d3_sj);
     }
   }
 
-  return vSub(a_sj_pert, a_si_pert);
+  return vSub(a_sj_pertK.result(), a_si_pertK.result());
 }
 
 // ── Full RHS evaluation ──────────────────────────────────────────────────
@@ -1485,24 +1593,24 @@ static void lc_drift(ChainState &chain, double ds) {
   // Predictor: explicit Euler with frozen Omega and r_k
   std::vector<vectorP> u1(nLinks);
   for (int k = 0; k < nLinks; k++) {
-    double rk    = std::max(vMagSq(u0[k]), 1e-30);
+    double rk = std::max(vMagSq(u0[k]), 1e-30);
     double alpha = Omega / rk;
     u1[k] = vAdd(u0[k], vScale(chain.links[k].w, alpha * ds));
   }
 
   // Corrector: 3 iterations of implicit midpoint
-  double Omega_mid = Omega;  // ← hoisted; final value used for R and t_phys
+  double Omega_mid = Omega; // ← hoisted; final value used for R and t_phys
   for (int iter = 0; iter < 3; iter++) {
     std::vector<LCLink> midLinks = chain.links;
     for (int k = 0; k < nLinks; k++)
       midLinks[k].u = vScale(vAdd(u0[k], u1[k]), 0.5);
 
-    Omega_mid = lc_computeOmega(midLinks);  // ← updates the outer variable
+    Omega_mid = lc_computeOmega(midLinks); // ← updates the outer variable
 
     for (int k = 0; k < nLinks; k++) {
-      vectorP u_mid  = midLinks[k].u;
-      double  r_mid  = std::max(vMagSq(u_mid), 1e-30);
-      double  alpha_mid = Omega_mid / r_mid;
+      vectorP u_mid = midLinks[k].u;
+      double r_mid = std::max(vMagSq(u_mid), 1e-30);
+      double alpha_mid = Omega_mid / r_mid;
       u1[k] = vAdd(u0[k], vScale(chain.links[k].w, alpha_mid * ds));
     }
   }
@@ -1512,8 +1620,8 @@ static void lc_drift(ChainState &chain, double ds) {
     chain.links[k].u = u1[k];
 
   // Use midpoint Omega — consistent with the corrected u_k
-  chain.R      = vAdd(chain.R, vScale(chain.V_cm, Omega_mid * ds));  // was Omega
-  chain.t_phys += Omega_mid * ds;                                     // was Omega
+  chain.R = vAdd(chain.R, vScale(chain.V_cm, Omega_mid * ds)); // was Omega
+  chain.t_phys += Omega_mid * ds;                              // was Omega
 
   chain.Omega = lc_computeOmega(chain.links);
 }
@@ -1582,6 +1690,10 @@ void moveVerletLC(std::vector<std::unique_ptr<Body>> &bodies, double &dt) {
   lc_kick(chain, bodies, ds * 0.5);
 
   lc_chainToCartesian(chain, bodies);
+
+  // Feed back actual physical time elapsed (tracked by Sundman transform
+  // inside lc_drift) so the caller's clock stays accurate.
+  dt = chain.t_phys;
 }
 
 // ── moveYoshidaLC ────────────────────────────────────────────────────────
@@ -1615,6 +1727,10 @@ void moveYoshidaLC(std::vector<std::unique_ptr<Body>> &bodies, double &dt) {
   }
 
   lc_chainToCartesian(chain, bodies);
+
+  // Feed back actual physical time elapsed (tracked by Sundman transform
+  // inside lc_drift) so the caller's clock stays accurate.
+  dt = chain.t_phys;
 }
 
 // ── moveHermiteLC ────────────────────────────────────────────────────────
@@ -1644,23 +1760,37 @@ double moveHermiteLC(std::vector<std::unique_ptr<Body>> &bodies, double &dt) {
   ChainDerivs f0;
   lc_chainRHS(chain, bodies, f0);
 
-  // ── 2. Numerical jerk: j₀ ≈ (f(y+f·ε) − f(y)) / ε ─────────────
+  // ── 2. Numerical jerk: j₀ ≈ (f(y+f·ε) − f(y−f·ε)) / (2ε) ──────
+  //   Central finite difference: O(ε²) truncation error vs O(ε) for
+  //   forward difference.  With ε = 0.01·ds this gives ~0.01% jerk
+  //   error instead of ~1%, at the cost of one extra RHS evaluation.
   double eps_j = std::max(ds * 0.01, 1e-12);
-  ChainState state_eps = lc_addScaled(chain, f0, eps_j);
-  ChainDerivs f_eps;
-  lc_chainRHS(state_eps, bodies, f_eps);
+  //ChainState state_eps = lc_addScaled(chain, f0, eps_j);
+  //ChainDerivs f_eps;
+  //lc_chainRHS(state_eps, bodies, f_eps);
+  ChainState state_plus  = lc_addScaled(chain, f0,  eps_j);
+  ChainState state_minus = lc_addScaled(chain, f0, -eps_j);
+  ChainDerivs f_plus, f_minus;
+  lc_chainRHS(state_plus,  bodies, f_plus);
+  lc_chainRHS(state_minus, bodies, f_minus);
 
+  double inv_2eps = 1.0 / (2.0 * eps_j);
   ChainDerivs j0;
   j0.du.resize(nLinks);
   j0.dw.resize(nLinks);
   j0.dh.resize(nLinks);
   for (int k = 0; k < nLinks; k++) {
-    j0.du[k] = vScale(vSub(f_eps.du[k], f0.du[k]), 1.0 / eps_j);
-    j0.dw[k] = vScale(vSub(f_eps.dw[k], f0.dw[k]), 1.0 / eps_j);
-    j0.dh[k] = (f_eps.dh[k] - f0.dh[k]) / eps_j;
+    //j0.du[k] = vScale(vSub(f_eps.du[k], f0.du[k]), 1.0 / eps_j);
+    //j0.dw[k] = vScale(vSub(f_eps.dw[k], f0.dw[k]), 1.0 / eps_j);
+    //j0.dh[k] = (f_eps.dh[k] - f0.dh[k]) / eps_j;
+    j0.du[k] = vScale(vSub(f_plus.du[k], f_minus.du[k]), inv_2eps);
+    j0.dw[k] = vScale(vSub(f_plus.dw[k], f_minus.dw[k]), inv_2eps);
+    j0.dh[k] = (f_plus.dh[k] - f_minus.dh[k]) * inv_2eps;
   }
-  j0.dR = vScale(vSub(f_eps.dR, f0.dR), 1.0 / eps_j);
-  j0.dt_ds = (f_eps.dt_ds - f0.dt_ds) / eps_j;
+  //j0.dR = vScale(vSub(f_eps.dR, f0.dR), 1.0 / eps_j);
+  //j0.dt_ds = (f_eps.dt_ds - f0.dt_ds) / eps_j;
+  j0.dR = vScale(vSub(f_plus.dR, f_minus.dR), inv_2eps);
+  j0.dt_ds = (f_plus.dt_ds - f_minus.dt_ds) * inv_2eps;
 
   // ── 3. Predict (3rd order): y_p = y₀ + f₀·Δs + j₀·(Δs²/2) ─────
   ChainState state_pred = lc_addScaled(chain, f0, ds);
@@ -1962,7 +2092,7 @@ void moveYoshidaHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
 }
 
 double moveHermiteHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
-                         double etaSq) {
+                           double etaSq) {
   double diht;
   double r2_min = 1e30;
   int n = static_cast<int>(bodies.size());
@@ -1988,8 +2118,8 @@ double moveHermiteHybridLC(std::vector<std::unique_ptr<Body>> &bodies,
 }
 
 double moveRK45HybridLC(std::vector<std::unique_ptr<Body>> &bodies,
-                      double etaSq , double tol , double dt_max) {
-  double r2_min = 1e30 , diht;
+                        double etaSq, double tol, double dt_max) {
+  double r2_min = 1e30, diht;
   int n = static_cast<int>(bodies.size());
   for (int i = 0; i < n; i++) {
     for (int j = i + 1; j < n; j++) {
@@ -2105,14 +2235,14 @@ int main() {
   do
 
   {
-    std::cout << "0:Exit\n1:Add Body\n2:Edit Body\n3:Delete "
-                 "Body\n4:Run\n5:View\n7:Orbit Sandbox\n-----------------\n Choose:";
+    std::cout
+        << "0:Exit\n1:Add Body\n2:Edit Body\n3:Delete "
+           "Body\n4:Run\n5:View\n7:Orbit Sandbox\n-----------------\n Choose:";
     std::cin >> operation;
 
-    if (operation == 6)
-    {
+    if (operation == 6) {
       int gs;
-      std::cout << "GridSize:" ;
+      std::cout << "GridSize:";
       std::cin >> gs;
       gridsize = gs;
     }
@@ -2257,7 +2387,8 @@ int main() {
 
         auto star =
             std::make_unique<Body>(1000000000000.0f, 1.0f, true, vector0);
-        auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector1.negate(), vector4);
+        auto perf = std::make_unique<Body>(10.0f, 0.1f, true, vector1.negate(),
+                                           vector4);
 
         bodys.push_back(std::move(star));
         bodys.push_back(std::move(perf));
@@ -2390,45 +2521,50 @@ int main() {
                                   // try to copy a unique_ptr into b
         bodOs.push_back(b ? b->clone() : nullptr);
 
-      struct PosRad { vectorP pos; int rad = 0; };
+      struct PosRad {
+        vectorP pos;
+        int rad = 0;
+      };
       std::vector<PosRad> posOs(bodys.size());
 
       for (int i = 0; i < bodys.size(); i++) {
         double tr = bodys[i]->m_radius;
-        posOs[i] = { bodys[i]->m_posVec, (tr == 0.5f) ? 0 : (int)std::round(tr) };
+        posOs[i] = {bodys[i]->m_posVec, (tr == 0.5f) ? 0 : (int)std::round(tr)};
       } // i dont need this becasue of my poor design choices , at start every
         // posOs = 0 and since
       // i check every posOs for every body each posOs is valid because its also
       // checked for 0 wait WTFF,nvm i needed that because what it i dont have a
       // body at 0,0
 
-
-      int gridhalf = (gridsize + 1)/2 ;
+      int gridhalf = (gridsize + 1) / 2;
       int gridmidarr = gridhalf - 1;
-      int gridsizearr = gridsize -1;
+      int gridsizearr = gridsize - 1;
 
       std::vector<char> livyur(gridsize, '.');
       std::vector<std::vector<char>> livyud(gridsize, livyur);
 
       // std::vector<char> livyurc(21, '.');
       // std::vector<std::vector<char>> livyudc(21, livyurc);
-      if (Draw == 1)
-      {
+      if (Draw == 1) {
         InitWindow(1280, 720, "oto");
         SetTargetFPS(fps);
       }
 
       Camera3D camera = {0};
-      camera.position = {0.0f, 50.0f, 0.0f}; // directly above the scene, looking straight down
+      camera.position = {
+          0.0f, 50.0f, 0.0f}; // directly above the scene, looking straight down
       camera.target = {0.0f, 0.0f, 0.0f}; // looking down at the origin
-      camera.up = {0.0f, 0.0f,-1.0f}; // see note below -- this can't be (0,1,0) anymore
-      camera.fovy = 40.0f; // now means "view height in world units," not degrees
+      camera.up = {0.0f, 0.0f,
+                   -1.0f}; // see note below -- this can't be (0,1,0) anymore
+      camera.fovy =
+          40.0f; // now means "view height in world units," not degrees
       camera.projection = CAMERA_PERSPECTIVE; // flat 2D-style view, no
                                               // perspective foreshortening
 
-      const Vector3 planeCenter = {0.0f, 0.0f,0.0f}; // World-space center of the plane
-      const Vector2 planeSize = {8.0f, 4.5f}; // Width (X) and length (Z) of the plane
-
+      const Vector3 planeCenter = {0.0f, 0.0f,
+                                   0.0f}; // World-space center of the plane
+      const Vector2 planeSize = {8.0f,
+                                 4.5f}; // Width (X) and length (Z) of the plane
 
       int rerun = 1;
 
@@ -2549,7 +2685,7 @@ int main() {
                  s < hmframe && !bodys.empty() && !WindowShouldClose(); s++) {
               frame++;
 
-              //physics::moveVerlet(bodys);
+              // physics::moveVerlet(bodys);
               //diht = physics::moveHermiteHybridLC(bodys, 150);
               //diht = physics::moveRK45LC(bodys, dt, 0.00001, 1 / 30.0);
               diht = physics::moveRK45HybridLC(bodys, 150, 0.00001, 1 / 30.0);
@@ -2728,8 +2864,8 @@ int main() {
                       bodys[i]->m_posVec.round(); // tbpv = temporary bodies
                                                   // postition vector
 
-                  if (tbpv.icap < 0-(gridmidarr) || tbpv.icap > gridmidarr || tbpv.jcap < 0-(gridmidarr) || tbpv.jcap > gridmidarr)
-                  {
+                  if (tbpv.icap < 0 - (gridmidarr) || tbpv.icap > gridmidarr ||
+                      tbpv.jcap < 0 - (gridmidarr) || tbpv.jcap > gridmidarr) {
                     tbpv = vectorP(0, 0);
                     // AHHH ts so goated as its tbps in 0 its
                     // ovec is 0 and since
@@ -2737,9 +2873,8 @@ int main() {
                     // ahahhaahah
                   }
 
-
                   double tr = bodys[i]->m_radius;
-                  posOs[i] = { tbpv, (tr == 0.5f) ? 0 : (int)std::round(tr) };
+                  posOs[i] = {tbpv, (tr == 0.5f) ? 0 : (int)std::round(tr)};
                 }
               }
 
@@ -2770,11 +2905,11 @@ int main() {
 
               physics::moveVerlet(bodys);
 
-              //eos(KE, PE, E, bodys);
+              // eos(KE, PE, E, bodys);
 
               double Edifn = E - ogE;
 
-              //LOG("Net Ediffn : " << Edifn);
+              // LOG("Net Ediffn : " << Edifn);
 
               auto colData = (physics::checkCol(bodys, colClusters));
               auto killed = std::move(colData.deadBodies);
@@ -2787,23 +2922,19 @@ int main() {
               // Keep posOs in sync — merges can shrink bodys, leaving stale
               // slots that the render loop would read past.
               posOs.resize(bodys.size());
-              if (stat == 0)
-              {
-                for (int i = 0; i < posOs.size(); i++)
-                {
-                  vectorP Ovec  = posOs[i].pos;
-                  int     oldRad = posOs[i].rad;
+              if (stat == 0) {
+                for (int i = 0; i < posOs.size(); i++) {
+                  vectorP Ovec = posOs[i].pos;
+                  int oldRad = posOs[i].rad;
 
                   // Search for a live body at this slot. Defer all painting
                   // until after the full search — the old code painted '.'
                   // inside the loop for every non-matching body before finding
                   // the match, which carved a bite out of the disk (Pac-Man).
-                  bool found  = false;
-                  int  newRad = 0;
-                  for (int j = 0; j < bodys.size(); j++)
-                  {
-                    if (Ovec == bodys[j]->m_posVec.round())
-                    {
+                  bool found = false;
+                  int newRad = 0;
+                  for (int j = 0; j < bodys.size(); j++) {
+                    if (Ovec == bodys[j]->m_posVec.round()) {
                       found = true;
                       double temprad = bodys[j]->m_radius;
                       newRad = (temprad == 0.5f) ? 0 : (int)std::round(temprad);
@@ -2811,35 +2942,34 @@ int main() {
                     }
                   }
 
-                  if (found)
-                  {
+                  if (found) {
                     // Paint the full disk 'O' at the current position.
                     for (int r1 = -newRad; r1 <= newRad; r1++)
-                    for (int r2 = -newRad; r2 <= newRad; r2++)
-                      if (r1*r1 + r2*r2 <= newRad*newRad)
-                      {
-                        int tempj = Ovec.jcap + gridmidarr + r1;
-                        int tempi = Ovec.icap + gridmidarr + r2;
-                        if (tempj < 0 || tempj > gridsizearr) continue;
-                        if (tempi < 0 || tempi > gridsizearr) continue;
-                        livyud[tempj][tempi] = 'O';
-                      }
-                  }
-                  else
-                  {
+                      for (int r2 = -newRad; r2 <= newRad; r2++)
+                        if (r1 * r1 + r2 * r2 <= newRad * newRad) {
+                          int tempj = Ovec.jcap + gridmidarr + r1;
+                          int tempi = Ovec.icap + gridmidarr + r2;
+                          if (tempj < 0 || tempj > gridsizearr)
+                            continue;
+                          if (tempi < 0 || tempi > gridsizearr)
+                            continue;
+                          livyud[tempj][tempi] = 'O';
+                        }
+                  } else {
                     // No live body here — erase the disk using the radius it
                     // had last frame (stored in posOs[i].rad) so the whole
                     // painted area gets cleared, not just a single cell.
                     for (int r1 = -oldRad; r1 <= oldRad; r1++)
-                    for (int r2 = -oldRad; r2 <= oldRad; r2++)
-                      if (r1*r1 + r2*r2 <= oldRad*oldRad)
-                      {
-                        int tempj = Ovec.jcap + gridmidarr + r1;
-                        int tempi = Ovec.icap + gridmidarr + r2;
-                        if (tempj < 0 || tempj > gridsizearr) continue;
-                        if (tempi < 0 || tempi > gridsizearr) continue;
-                        livyud[tempj][tempi] = '.';
-                      }
+                      for (int r2 = -oldRad; r2 <= oldRad; r2++)
+                        if (r1 * r1 + r2 * r2 <= oldRad * oldRad) {
+                          int tempj = Ovec.jcap + gridmidarr + r1;
+                          int tempi = Ovec.icap + gridmidarr + r2;
+                          if (tempj < 0 || tempj > gridsizearr)
+                            continue;
+                          if (tempi < 0 || tempi > gridsizearr)
+                            continue;
+                          livyud[tempj][tempi] = '.';
+                        }
                   }
                 }
               }
@@ -2896,73 +3026,84 @@ int main() {
         // (Ctrl-C or 'q' + Enter to quit).  Grid-only display, no raylib.
         // ----------------------------------------------------------------
 
-        const double STAR_MASS   = 1e12;
+        const double STAR_MASS = 1e12;
         const double STAR_RADIUS = 5.0;
 
         // Ask for the body cap before entering the loop
         int bodyCap;
         std::cout << "Max simultaneous small bodies : ";
         std::cin >> bodyCap;
-        if (bodyCap < 1) bodyCap = 1;
+        if (bodyCap < 1)
+          bodyCap = 1;
 
         double smallMass;
         std::cout << "Small body mass : ";
         std::cin >> smallMass;
-        if (smallMass <= 0) smallMass = 1e6;
+        if (smallMass <= 0)
+          smallMass = 1e6;
 
         double smallRadius;
         std::cout << "Small body radius (e.g. 0.5) : ";
         std::cin >> smallRadius;
-        if (smallRadius <= 0) smallRadius = 0.5;
+        if (smallRadius <= 0)
+          smallRadius = 0.5;
 
         // Approximate orbit distance (centre of spawn band)
         double orbitDist;
         std::cout << "Approximate orbit distance from star (units) : ";
         std::cin >> orbitDist;
-        if (orbitDist < STAR_RADIUS + 1.0) orbitDist = STAR_RADIUS + 1.0;
+        if (orbitDist < STAR_RADIUS + 1.0)
+          orbitDist = STAR_RADIUS + 1.0;
 
         // Velocity scale: 1.0 = perfect circular orbit,
         //   <1 = inward spiral / ellipse, >1 = outward / escape
         double velScale;
-        std::cout << "Velocity scale (1.0 = circular orbit, <1 slower, >1 faster) : ";
+        std::cout
+            << "Velocity scale (1.0 = circular orbit, <1 slower, >1 faster) : ";
         std::cin >> velScale;
-        if (velScale <= 0) velScale = 1.0;
+        if (velScale <= 0)
+          velScale = 1.0;
 
-        // Derive gridsize so the orbit fits with ~10 units of buffer on each side.
-        // gridsize must be odd so the centre cell aligns with (0,0).
+        // Derive gridsize so the orbit fits with ~10 units of buffer on each
+        // side. gridsize must be odd so the centre cell aligns with (0,0).
         {
-            int needed = 2 * (int)std::ceil(orbitDist) + 20 + 1; // +20 = 10 each side
-            if (needed % 2 == 0) needed++;                        // force odd
-            gridsize = needed;
+          int needed =
+              2 * (int)std::ceil(orbitDist) + 20 + 1; // +20 = 10 each side
+          if (needed % 2 == 0)
+            needed++; // force odd
+          gridsize = needed;
         }
-        LOG("gridsize set to " << gridsize << " to fit orbit distance " << orbitDist);
+        LOG("gridsize set to " << gridsize << " to fit orbit distance "
+                               << orbitDist);
 
         // Clear whatever the user had in bodys and put just the star in
         bodys.clear();
-        bodys.push_back(std::make_unique<Body>(
-            STAR_MASS, STAR_RADIUS,
-            false,               // immovable
-            vectorP(0.0, 0.0),
-            vectorP(0.0, 0.0)));
+        bodys.push_back(std::make_unique<Body>(STAR_MASS, STAR_RADIUS,
+                                               false, // immovable
+                                               vectorP(0.0, 0.0),
+                                               vectorP(0.0, 0.0)));
 
         // Grid setup — computed after gridsize is set above
-        int gridhalf7    = (gridsize + 1) / 2;
-        int gridmidarr7  = gridhalf7 - 1;
+        int gridhalf7 = (gridsize + 1) / 2;
+        int gridmidarr7 = gridhalf7 - 1;
         int gridsizearr7 = gridsize - 1;
 
         std::vector<char> livyur7(gridsize, '.');
         std::vector<std::vector<char>> livyud7(gridsize, livyur7);
 
         // posOs for the sandbox — grows/shrinks with bodys
-        struct PosRad7 { vectorP pos; int rad = 0; };
+        struct PosRad7 {
+          vectorP pos;
+          int rad = 0;
+        };
         auto makePR7 = [](const std::unique_ptr<Body> &b) -> PosRad7 {
-            double tr = b->m_radius;
-            return { b->m_posVec, (tr == 0.5) ? 0 : (int)std::round(tr) };
+          double tr = b->m_radius;
+          return {b->m_posVec, (tr == 0.5) ? 0 : (int)std::round(tr)};
         };
 
         std::vector<PosRad7> posOs7(bodys.size());
         for (int i = 0; i < (int)bodys.size(); i++)
-            posOs7[i] = makePR7(bodys[i]);
+          posOs7[i] = makePR7(bodys[i]);
 
         // RNG — spawn band is ±10% around the chosen orbit distance
         std::mt19937 rng(std::random_device{}());
@@ -2971,33 +3112,30 @@ int main() {
                                                           orbitDist * 1.1);
 
         auto spawnBody = [&]() {
-            double angle   = angleDist(rng);
-            double spawnR  = radiusDist(rng);
+          double angle = angleDist(rng);
+          double spawnR = radiusDist(rng);
 
-            // Position on a circle of radius spawnR
-            double px = spawnR * std::cos(angle);
-            double py = spawnR * std::sin(angle);
+          // Position on a circle of radius spawnR
+          double px = spawnR * std::cos(angle);
+          double py = spawnR * std::sin(angle);
 
-            // Circular-orbit speed at this radius, scaled by velScale
-            double vcirc = std::sqrt(physics::G * STAR_MASS / spawnR) * velScale;
+          // Circular-orbit speed at this radius, scaled by velScale
+          double vcirc = std::sqrt(physics::G * STAR_MASS / spawnR) * velScale;
 
-            // Perpendicular direction — randomise CW vs CCW
-            double sign = (rng() & 1) ? 1.0 : -1.0;
-            double vx = -sign * std::sin(angle) * vcirc;
-            double vy =  sign * std::cos(angle) * vcirc;
+          // Perpendicular direction — randomise CW vs CCW
+          double sign = (rng() & 1) ? 1.0 : -1.0;
+          double vx = -sign * std::sin(angle) * vcirc;
+          double vy = sign * std::cos(angle) * vcirc;
 
-            bodys.push_back(std::make_unique<Body>(
-                smallMass, smallRadius,
-                true,
-                vectorP(px, py),
-                vectorP(vx, vy)));
+          bodys.push_back(std::make_unique<Body>(
+              smallMass, smallRadius, true, vectorP(px, py), vectorP(vx, vy)));
 
-            posOs7.push_back(makePR7(bodys.back()));
+          posOs7.push_back(makePR7(bodys.back()));
         };
 
         // Fill up to cap immediately
         for (int i = 0; i < bodyCap; i++)
-            spawnBody();
+          spawnBody();
 
         auto dt_dur7 = std::chrono::duration_cast<clock::duration>(
             std::chrono::duration<double>(dt));
@@ -3006,168 +3144,164 @@ int main() {
         auto nextFrame7 = clock::now();
 
         bool quit7 = false;
-        while (!quit7)
-        {
-            // --- Snapshot positions before physics (for grid update) ---
-            for (int i = 0; i < (int)bodys.size(); i++) {
-                if (i >= (int)posOs7.size()) posOs7.resize(bodys.size());
-                vectorP tbpv = bodys[i]->m_posVec.round();
-                if (tbpv.icap < -gridmidarr7 || tbpv.icap > gridmidarr7 ||
-                    tbpv.jcap < -gridmidarr7 || tbpv.jcap > gridmidarr7)
-                    tbpv = vectorP(0, 0);
-                double tr = bodys[i]->m_radius;
-                posOs7[i] = { tbpv, (tr == 0.5) ? 0 : (int)std::round(tr) };
+        while (!quit7) {
+          // --- Snapshot positions before physics (for grid update) ---
+          for (int i = 0; i < (int)bodys.size(); i++) {
+            if (i >= (int)posOs7.size())
+              posOs7.resize(bodys.size());
+            vectorP tbpv = bodys[i]->m_posVec.round();
+            if (tbpv.icap < -gridmidarr7 || tbpv.icap > gridmidarr7 ||
+                tbpv.jcap < -gridmidarr7 || tbpv.jcap > gridmidarr7)
+              tbpv = vectorP(0, 0);
+            double tr = bodys[i]->m_radius;
+            posOs7[i] = {tbpv, (tr == 0.5) ? 0 : (int)std::round(tr)};
+          }
+
+          // --- Physics step ---
+          physics::moveVerlet(bodys);
+          frame7++;
+
+          // Hard-pin the star (body[0]) after every step.
+          // movability=false already blocks velocity integration, but
+          // floating-point force accumulation from many bodies can nudge it.
+          bodys[0]->m_posVec = vectorP(0.0, 0.0);
+          bodys[0]->m_velVec = vectorP(0.0, 0.0);
+          bodys[0]->m_accVec = vectorP(0.0, 0.0);
+          bodys[0]->m_forVec = vectorP(0.0, 0.0);
+          bodys[0]->m_forRes = vectorP(0.0, 0.0);
+
+          // --- Collision detection ---
+          auto colData7 = physics::checkCol(bodys, colClusters);
+          auto killed7 = std::move(colData7.deadBodies);
+          auto newClusters7 = std::move(colData7.clusters);
+          for (auto &c : newClusters7)
+            Clusters.push_back(std::move(c));
+
+          // Pin again after collision detection (checkCol tags bodies via
+          // clusterIndex; the immovable-cluster fix handles this, but an
+          // extra pin guarantees nothing slipped through).
+          bodys[0]->m_posVec = vectorP(0.0, 0.0);
+          bodys[0]->m_velVec = vectorP(0.0, 0.0);
+          bodys[0]->m_accVec = vectorP(0.0, 0.0);
+          bodys[0]->m_forVec = vectorP(0.0, 0.0);
+          bodys[0]->m_forRes = vectorP(0.0, 0.0);
+          if (!killed7.empty())
+            colPairs.push_back(std::move(killed7));
+
+          // Sync posOs7 size after merges
+          posOs7.resize(bodys.size());
+
+          // --- Kill bodies that have left the grid ---
+          // Skip body[0] (the star). Iterate back-to-front so erasing an
+          // element doesn't shift the indices of elements yet to be checked.
+          for (int i = (int)bodys.size() - 1; i >= 1; i--) {
+            vectorP p = bodys[i]->m_posVec.round();
+            if (p.icap < -gridmidarr7 || p.icap > gridmidarr7 ||
+                p.jcap < -gridmidarr7 || p.jcap > gridmidarr7) {
+              // Clear the last grid cell this body occupied before
+              // removing it — otherwise the render loop never sees the
+              // slot again and the 'O' stays painted permanently.
+              vectorP last = posOs7[i].pos;
+              int lastRad = posOs7[i].rad;
+              for (int r1 = -lastRad; r1 <= lastRad; r1++)
+                for (int r2 = -lastRad; r2 <= lastRad; r2++)
+                  if (r1 * r1 + r2 * r2 <= lastRad * lastRad) {
+                    int tj = (int)last.jcap + gridmidarr7 + r1;
+                    int ti = (int)last.icap + gridmidarr7 + r2;
+                    if (tj < 0 || tj > gridsizearr7)
+                      continue;
+                    if (ti < 0 || ti > gridsizearr7)
+                      continue;
+                    livyud7[tj][ti] = '.';
+                  }
+
+              bodys.erase(bodys.begin() + i);
+              posOs7.erase(posOs7.begin() + i);
+            }
+          }
+
+          // --- Spawn to maintain cap (star is body[0], doesn't count) ---
+          int liveSmall = (int)bodys.size() - 1; // subtract the star
+          while (liveSmall < bodyCap) {
+            spawnBody();
+            liveSmall++;
+          }
+
+          // --- Grid render ---
+          for (int i = 0; i < (int)posOs7.size(); i++) {
+            vectorP Ovec = posOs7[i].pos;
+            int oldRad = posOs7[i].rad;
+
+            bool found = false;
+            int newRad = 0;
+            for (int j = 0; j < (int)bodys.size(); j++) {
+              if (Ovec == bodys[j]->m_posVec.round()) {
+                found = true;
+                double tr = bodys[j]->m_radius;
+                newRad = (tr == 0.5) ? 0 : (int)std::round(tr);
+                break;
+              }
             }
 
-            // --- Physics step ---
-            physics::moveVerlet(bodys);
-            frame7++;
-
-            // Hard-pin the star (body[0]) after every step.
-            // movability=false already blocks velocity integration, but
-            // floating-point force accumulation from many bodies can nudge it.
-            bodys[0]->m_posVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_velVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_accVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_forVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_forRes  = vectorP(0.0, 0.0);
-
-            // --- Collision detection ---
-            auto colData7 = physics::checkCol(bodys, colClusters);
-            auto killed7  = std::move(colData7.deadBodies);
-            auto newClusters7 = std::move(colData7.clusters);
-            for (auto &c : newClusters7) Clusters.push_back(std::move(c));
-
-            // Pin again after collision detection (checkCol tags bodies via
-            // clusterIndex; the immovable-cluster fix handles this, but an
-            // extra pin guarantees nothing slipped through).
-            bodys[0]->m_posVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_velVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_accVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_forVec  = vectorP(0.0, 0.0);
-            bodys[0]->m_forRes  = vectorP(0.0, 0.0);
-            if (!killed7.empty())        colPairs.push_back(std::move(killed7));
-
-            // Sync posOs7 size after merges
-            posOs7.resize(bodys.size());
-
-            // --- Kill bodies that have left the grid ---
-            // Skip body[0] (the star). Iterate back-to-front so erasing an
-            // element doesn't shift the indices of elements yet to be checked.
-            for (int i = (int)bodys.size() - 1; i >= 1; i--) {
-                vectorP p = bodys[i]->m_posVec.round();
-                if (p.icap < -gridmidarr7 || p.icap > gridmidarr7 ||
-                    p.jcap < -gridmidarr7 || p.jcap > gridmidarr7)
-                {
-                    // Clear the last grid cell this body occupied before
-                    // removing it — otherwise the render loop never sees the
-                    // slot again and the 'O' stays painted permanently.
-                    vectorP last = posOs7[i].pos;
-                    int     lastRad = posOs7[i].rad;
-                    for (int r1 = -lastRad; r1 <= lastRad; r1++)
-                    for (int r2 = -lastRad; r2 <= lastRad; r2++)
-                        if (r1*r1 + r2*r2 <= lastRad*lastRad)
-                        {
-                            int tj = (int)last.jcap + gridmidarr7 + r1;
-                            int ti = (int)last.icap + gridmidarr7 + r2;
-                            if (tj < 0 || tj > gridsizearr7) continue;
-                            if (ti < 0 || ti > gridsizearr7) continue;
-                            livyud7[tj][ti] = '.';
-                        }
-
-                    bodys.erase(bodys.begin() + i);
-                    posOs7.erase(posOs7.begin() + i);
-                }
+            if (found) {
+              for (int r1 = -newRad; r1 <= newRad; r1++)
+                for (int r2 = -newRad; r2 <= newRad; r2++)
+                  if (r1 * r1 + r2 * r2 <= newRad * newRad) {
+                    int tj = (int)Ovec.jcap + gridmidarr7 + r1;
+                    int ti = (int)Ovec.icap + gridmidarr7 + r2;
+                    if (tj < 0 || tj > gridsizearr7)
+                      continue;
+                    if (ti < 0 || ti > gridsizearr7)
+                      continue;
+                    livyud7[tj][ti] = 'O';
+                  }
+            } else {
+              for (int r1 = -oldRad; r1 <= oldRad; r1++)
+                for (int r2 = -oldRad; r2 <= oldRad; r2++)
+                  if (r1 * r1 + r2 * r2 <= oldRad * oldRad) {
+                    int tj = (int)Ovec.jcap + gridmidarr7 + r1;
+                    int ti = (int)Ovec.icap + gridmidarr7 + r2;
+                    if (tj < 0 || tj > gridsizearr7)
+                      continue;
+                    if (ti < 0 || ti > gridsizearr7)
+                      continue;
+                    livyud7[tj][ti] = '.';
+                  }
             }
+          }
 
-            // --- Spawn to maintain cap (star is body[0], doesn't count) ---
-            int liveSmall = (int)bodys.size() - 1; // subtract the star
-            while (liveSmall < bodyCap) {
-                spawnBody();
-                liveSmall++;
+          // --- Print grid at requested frame interval ---
+          if (frame7 % int((1.0 / dt) / fps) == 0) {
+            drawGrid(livyud7);
+            /*LOG("frame=" << frame7
+                << "  bodies=" << (bodys.size() - 1)
+                << "  (q+Enter to quit)");*/
+            LOG("----------------------------");
+
+            // Non-blocking quit check: peek at stdin
+            // On Linux a line in stdin = user typed something
+            // Use select with 0 timeout so we never block the sim
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            struct timeval tv = {0, 0};
+            if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0) {
+              std::string line;
+              std::getline(std::cin, line);
+              if (line == "q" || line == "Q")
+                quit7 = true;
             }
+          }
 
-            // --- Grid render ---
-            for (int i = 0; i < (int)posOs7.size(); i++)
-            {
-                vectorP Ovec   = posOs7[i].pos;
-                int     oldRad = posOs7[i].rad;
-
-                bool found  = false;
-                int  newRad = 0;
-                for (int j = 0; j < (int)bodys.size(); j++)
-                {
-                    if (Ovec == bodys[j]->m_posVec.round())
-                    {
-                        found = true;
-                        double tr = bodys[j]->m_radius;
-                        newRad = (tr == 0.5) ? 0 : (int)std::round(tr);
-                        break;
-                    }
-                }
-
-                if (found)
-                {
-                    for (int r1 = -newRad; r1 <= newRad; r1++)
-                    for (int r2 = -newRad; r2 <= newRad; r2++)
-                        if (r1*r1 + r2*r2 <= newRad*newRad)
-                        {
-                            int tj = (int)Ovec.jcap + gridmidarr7 + r1;
-                            int ti = (int)Ovec.icap + gridmidarr7 + r2;
-                            if (tj < 0 || tj > gridsizearr7) continue;
-                            if (ti < 0 || ti > gridsizearr7) continue;
-                            livyud7[tj][ti] = 'O';
-                        }
-                }
-                else
-                {
-                    for (int r1 = -oldRad; r1 <= oldRad; r1++)
-                    for (int r2 = -oldRad; r2 <= oldRad; r2++)
-                        if (r1*r1 + r2*r2 <= oldRad*oldRad)
-                        {
-                            int tj = (int)Ovec.jcap + gridmidarr7 + r1;
-                            int ti = (int)Ovec.icap + gridmidarr7 + r2;
-                            if (tj < 0 || tj > gridsizearr7) continue;
-                            if (ti < 0 || ti > gridsizearr7) continue;
-                            livyud7[tj][ti] = '.';
-                        }
-                }
-            }
-
-            // --- Print grid at requested frame interval ---
-            if (frame7 % int((1.0 / dt) / fps) == 0)
-            {
-                drawGrid(livyud7);
-                /*LOG("frame=" << frame7
-                    << "  bodies=" << (bodys.size() - 1)
-                    << "  (q+Enter to quit)");*/
-                LOG("----------------------------");
-
-                // Non-blocking quit check: peek at stdin
-                // On Linux a line in stdin = user typed something
-                // Use select with 0 timeout so we never block the sim
-                fd_set fds;
-                FD_ZERO(&fds);
-                FD_SET(STDIN_FILENO, &fds);
-                struct timeval tv = {0, 0};
-                if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0)
-                {
-                    std::string line;
-                    std::getline(std::cin, line);
-                    if (line == "q" || line == "Q")
-                        quit7 = true;
-                }
-            }
-
-            nextFrame7 += dt_dur7;
-            std::this_thread::sleep_until(nextFrame7);
+          nextFrame7 += dt_dur7;
+          std::this_thread::sleep_until(nextFrame7);
         }
 
         // Clean up — restore just the star so main menu doesn't explode
         bodys.clear();
-        bodys.push_back(std::make_unique<Body>(
-            STAR_MASS, STAR_RADIUS, false,
-            vectorP(0.0, 0.0), vectorP(0.0, 0.0)));
+        bodys.push_back(std::make_unique<Body>(STAR_MASS, STAR_RADIUS, false,
+                                               vectorP(0.0, 0.0),
+                                               vectorP(0.0, 0.0)));
       } // end stat == 7
 
       if (stat == 2) {
@@ -3324,45 +3458,52 @@ int main() {
 
 void eos(double &KE, double &PE, double &E,
          std::vector<std::unique_ptr<Body>> &bodys) {
-  KE = 0.0f;
-  PE = 0.0f;
-  E = 0.0f;
-  for (int i = 0; i < bodys.size(); i++) {
-    KE += 0.5f * bodys[i]->m_Mass * bodys[i]->m_velVec.magSq();
+  // Kahan summation for KE and PE.
+  // KE sums ½·m·v² over all bodies: a star with mass ~10¹² kg next to
+  // a 1-kg test particle means terms differing by 12 orders of magnitude.
+  // PE sums over all N(N-1)/2 pairs — the primary observable for energy
+  // conservation, so accumulated error here registers directly as drift.
+  KahanSum keK, peK;
+
+  for (int i = 0; i < (int)bodys.size(); i++) {
+    keK.add(0.5 * bodys[i]->m_Mass * bodys[i]->m_velVec.magSq());
   }
 
-  // double eps = 0.1;
-
   if (bodys.size() > 1) {
-    for (int i = 0; i < bodys.size() - 1; i++) {
+    for (int i = 0; i < (int)bodys.size() - 1; i++) {
       auto &bodya = *bodys[i];
-      for (int j = i + 1; j < bodys.size(); j++) {
+      for (int j = i + 1; j < (int)bodys.size(); j++) {
         auto &bodyb = *bodys[j];
-
         double distSq = (physics::displacement(bodya, bodyb)).magSq();
-        double softenedDist = sqrt(distSq + (eps * eps));
-        PE += (-1 * physics::G * bodya.m_Mass * bodyb.m_Mass) / softenedDist;
+        double softenedDist = std::sqrt(distSq + (eps * eps));
+        peK.add((-physics::G * bodya.m_Mass * bodyb.m_Mass) / softenedDist);
       }
     }
   }
 
-  E = KE + PE;
+  KE = keK.result();
+  PE = peK.result();
+  E  = KE + PE;
 
   LOG("KE:" << KE);
   LOG("PE:" << PE);
-  LOG("E:" << E);
+  LOG("E:"  << E);
 }
 
 void linearP(vectorP &lP, std::vector<std::unique_ptr<Body>> &bodys) {
-  lP = vectorP(0.0f, 0.0f);
-  for (int i = 0; i < bodys.size(); i++) {
-    lP += bodys[i]->lP();
-  }
+  // Kahan summation for linear momentum.
+  // With bodies spanning many mass orders, small-body momenta are
+  // silently dropped by naive += when the accumulator is already large.
+  KahanVec2 lpK;
+  for (int i = 0; i < (int)bodys.size(); i++)
+    lpK.add(bodys[i]->lP());
+  lP = lpK.result();
 }
 
 void angularP(double &aP, std::vector<std::unique_ptr<Body>> &bodys) {
-  aP = 0;
-  for (int i = 0; i < bodys.size(); i++) {
-    aP += bodys[i]->aP();
-  }
+  // Kahan summation for angular momentum — same rationale as linearP.
+  KahanSum apK;
+  for (int i = 0; i < (int)bodys.size(); i++)
+    apK.add(bodys[i]->aP());
+  aP = apK.result();
 }
