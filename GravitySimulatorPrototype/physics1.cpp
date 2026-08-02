@@ -2614,7 +2614,7 @@ int main() {
 
                   if (tbpv.icap < 0-(gridmidarr) || tbpv.icap > gridmidarr || tbpv.jcap < 0-(gridmidarr) || tbpv.jcap > gridmidarr)
                   {
-                    tbpv = (0, 0);
+                    tbpv = vectorP(0, 0);
                     // AHHH ts so goated as its tbps in 0 its
                     // ovec is 0 and since
                     // the coords dont match ovec 0,0 will still be "."
@@ -2668,6 +2668,9 @@ int main() {
               if (!killed.empty()) {
                 colPairs.push_back(std::move(killed));
               }
+              // Keep posOs in sync with bodys — merges can shrink bodys,
+              // leaving stale slots that the render loop would read past.
+              posOs.resize(bodys.size());
               if (stat == 0)
               {
                 for (int i = 0; i < posOs.size(); i++)
@@ -2701,6 +2704,8 @@ int main() {
                       {
                         int tempj = Ovec.jcap + gridmidarr + r1;
                         int tempi = Ovec.icap + gridmidarr + r2;
+                        if (tempj < 0 || tempj > gridsizearr) continue;
+                        if (tempi < 0 || tempi > gridsizearr) continue;
                         livyud[tempj][tempi] = 'O';
                       }
                   }
@@ -2715,6 +2720,8 @@ int main() {
                       {
                         int tempj = Ovec.jcap + gridmidarr + r1;
                         int tempi = Ovec.icap + gridmidarr + r2;
+                        if (tempj < 0 || tempj > gridsizearr) continue;
+                        if (tempi < 0 || tempi > gridsizearr) continue;
                         livyud[tempj][tempi] = '.';
                       }
                   }
